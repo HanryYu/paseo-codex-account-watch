@@ -1,0 +1,9 @@
+Codex Account Watch for Paseo
+Copyright 2026 HanryYu
+
+The plugin scaffold and paseo-plugin.d.ts are derived from Paseo:
+https://github.com/getpaseo/paseo
+Copyright (c) 2025-present Mohamed Boudra
+Licensed under the Apache License, Version 2.0.
+
+This plugin is an independent project, not an official Paseo or OpenAI product.
