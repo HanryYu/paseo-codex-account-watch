@@ -35,6 +35,27 @@ const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 const safeMessage = (message: string) => new Error(message);
 
+export function localReloadEndpoint(target: unknown): string {
+  if (typeof target !== "string")
+    throw safeMessage(
+      "Cannot resolve this daemon's local endpoint; no process was stopped.",
+    );
+  if (target.startsWith("/") || target.startsWith("unix://")) return target;
+  const match =
+    /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]|\[::1\]):(\d+)$/.exec(target);
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 65535)
+    throw safeMessage(
+      "A local daemon endpoint is required; remote fallback is disabled.",
+    );
+  const hostname =
+    match[1] === "0.0.0.0"
+      ? "127.0.0.1"
+      : match[1] === "[::]"
+        ? "[::1]"
+        : match[1];
+  return `${hostname}:${match[2]}`;
+}
+
 export interface ProcessPort {
   command(executable: string, args: string[], home: string): Promise<string>;
 }
@@ -379,18 +400,7 @@ export class AccountService {
       await readFile(path.join(this.home, "paseo.pid"), "utf8"),
     );
     const target = typeof pid.listen === "string" ? pid.listen : pid.sockPath;
-    if (typeof target !== "string")
-      throw safeMessage(
-        "Cannot resolve this daemon's local endpoint; no process was stopped.",
-      );
-    if (target.startsWith("/") || target.startsWith("unix://")) return target;
-    const match =
-      /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]|\[::1\]):(\d+)$/.exec(target);
-    if (!match)
-      throw safeMessage(
-        "A local daemon endpoint is required; remote fallback is disabled.",
-      );
-    return `127.0.0.1:${match[2]}`;
+    return localReloadEndpoint(target);
   }
 
   private async requireOwnedCommand(paseo: PaseoApi) {

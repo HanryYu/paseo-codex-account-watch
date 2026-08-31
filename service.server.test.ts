@@ -4,7 +4,23 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type { PaseoApi } from "@getpaseo/client";
-import { AccountService } from "./service.server";
+import { AccountService, localReloadEndpoint } from "./service.server";
+
+test("reload endpoints stay host-local and preserve IPv6 loopback", () => {
+  assert.equal(localReloadEndpoint("0.0.0.0:6767"), "127.0.0.1:6767");
+  assert.equal(localReloadEndpoint("[::]:6767"), "[::1]:6767");
+  assert.equal(localReloadEndpoint("[::1]:6767"), "[::1]:6767");
+  assert.equal(localReloadEndpoint("localhost:6767"), "localhost:6767");
+  assert.equal(localReloadEndpoint("/tmp/fixture.sock"), "/tmp/fixture.sock");
+  for (const value of [
+    undefined,
+    "192.168.1.2:6767",
+    "evil.example:6767",
+    "127.0.0.1:99999",
+    "127.0.0.1:0",
+  ])
+    assert.throws(() => localReloadEndpoint(value));
+});
 
 async function fixture(command?: string[]) {
   const home = await mkdtemp(path.join(os.tmpdir(), "account-setup-test-"));
