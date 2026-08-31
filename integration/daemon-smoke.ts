@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { promisify } from "node:util";
 import { mkdtemp, mkdir, writeFile, readFile, rm, cp } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -81,9 +80,33 @@ async function main() {
     {
       env: { ...process.env, PASEO_HOME: home },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     },
   );
   const closed = once(daemon, "close");
+  let daemonExited = false;
+  void closed.then(() => {
+    daemonExited = true;
+  });
+  async function waitForExit(milliseconds: number) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      closed,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, milliseconds);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+  function signalTestGroup(signal: NodeJS.Signals) {
+    if (!daemonExited && daemon.pid) {
+      try {
+        process.kill(-daemon.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  }
   let startupOutput = "";
   daemon.stdout.on("data", (chunk) => {
     startupOutput = (startupOutput + chunk).slice(-6000);
@@ -276,6 +299,11 @@ async function main() {
     console.log(
       "隔离 daemon：无 node_modules 安装、自动配置、A→B 检测、拒绝过期确认、并发刷新去重、同 thread 切换、邮箱确认、外部配置保护与恢复通过。",
     );
+    if (process.argv.includes("--exit-before-cleanup")) {
+      await client.shutdownServer({ timeout: 3000 });
+      await waitForExit(3000);
+      assert.equal(daemonExited, true);
+    }
   } catch (error) {
     console.error(
       (await readFile(path.join(home, "daemon.log"), "utf8"))
@@ -291,14 +319,13 @@ async function main() {
     throw error;
   } finally {
     if (projectId) await client.removeProject(projectId).catch(() => {});
+    // Keep the exact test connection: CLI stop can fall back when the PID file is gone.
+    await client.shutdownServer({ timeout: 3000 }).catch(() => {});
     await client.close().catch(() => {});
-    await promisify(execFile)(
-      "paseo",
-      ["daemon", "stop", "--home", home, "--timeout", "3", "--force", "--json"],
-      { timeout: 10000 },
-    ).catch(() => {
-      daemon.kill("SIGKILL");
-    });
+    await waitForExit(3000);
+    signalTestGroup("SIGTERM");
+    await waitForExit(2000);
+    signalTestGroup("SIGKILL");
     await closed;
     await rm(root, { recursive: true, force: true });
   }

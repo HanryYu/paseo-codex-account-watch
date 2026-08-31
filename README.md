@@ -104,6 +104,8 @@ npm run test:codex
 
 Add `-- --git` to `npm run test:daemon` to install the public Git repository instead of the local source. This requires network access.
 
+Test cleanup uses the retained connection and the spawned test process group, never `paseo daemon stop` or a default host. Add `-- --exit-before-cleanup` to exercise cleanup after the test daemon has already exited.
+
 `test:codex` uses the real Codex binary with temporary synthetic credentials. It checks `account/read` before and after a process restart, without creating a thread or making a model request. It does not establish that a real authenticated inference request or billing account switched.
 
 For UI checks:
