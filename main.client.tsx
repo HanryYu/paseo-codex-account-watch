@@ -234,10 +234,10 @@ export function contributeClient(client: PluginClientContext) {
       if (stopped) return;
       const active = new Set<string>();
       for (const session of result.sessions.filter(
-        (item) => item.changed && item.workspaceId,
+        (item) => item.currentAccountLabel && item.workspaceId,
       )) {
         active.add(session.agentId);
-        const key = `${session.runId}:${session.fingerprint}`;
+        const key = `${session.runId}:${session.currentAccountLabel}:${session.changed ? session.fingerprint : "current"}`;
         const existing = entries.get(session.agentId);
         if (existing?.notice.get().open) {
           existing.notice.update(
@@ -246,44 +246,65 @@ export function contributeClient(client: PluginClientContext) {
           continue;
         }
         if (existing?.key === key) {
-          existing.notice.update(session);
+          if (session.changed) existing.notice.update(session);
           continue;
         }
         if (existing) void existing.remove();
         const notice = createNotice(session);
-        function AccountPill({ theme }: PluginComposerPillProps) {
+        function AccountPill({ theme, layout }: PluginComposerPillProps) {
           const state = useSyncExternalStore(
             notice.subscribe,
             notice.get,
             notice.get,
           );
+          const changed = state.session.changed;
           return (
             <>
               <Icon
                 name="UserRound"
                 size={14}
-                color={theme.colors.statusWarning}
+                color={
+                  changed
+                    ? theme.colors.statusWarning
+                    : theme.colors.foregroundMuted
+                }
               />
-              <Text style={{ color: theme.colors.foregroundMuted }}>
-                Codex account changed
+              <Text
+                numberOfLines={1}
+                ellipsizeMode="middle"
+                style={{
+                  color: changed
+                    ? theme.colors.statusWarning
+                    : theme.colors.foregroundMuted,
+                  maxWidth: layout.compact ? 140 : 220,
+                }}
+              >
+                {changed
+                  ? "Codex account changed"
+                  : state.session.currentAccountLabel}
               </Text>
-              <AccountDialog
-                session={state.session}
-                theme={theme}
-                open={state.open}
-                onOpenChange={notice.open}
-              />
+              {changed ? (
+                <AccountDialog
+                  session={state.session}
+                  theme={theme}
+                  open={state.open}
+                  onOpenChange={notice.open}
+                />
+              ) : null}
             </>
           );
         }
         const remove = client.addComposerPill({
-          id: "account-change",
-          title: "Review Codex account change",
+          id: "account-status",
+          title: session.changed
+            ? "Review Codex account change"
+            : `Current Codex account: ${session.currentAccountLabel}`,
           workspaceId: session.workspaceId,
           agentId: session.agentId,
           Component: AccountPill,
           onPress() {
-            notice.open(true);
+            if (notice.get().session.changed) notice.open(true);
+            else client.openSurface("main");
           },
         });
         entries.set(session.agentId, { key, notice, remove });

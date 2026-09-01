@@ -31,7 +31,7 @@ Install this plugin once per host, using its default ID.
 
 ## Use
 
-1. Launch a monitored Codex agent in Paseo.
+1. Launch a monitored Codex agent in Paseo. Its current account appears as a compact pill above the composer. Click the pill to open the host's account page.
 2. Change the Codex account on that same host with your existing account tool.
 3. A **Codex account changed** pill appears in the agent's composer. Click it, or open **Codex accounts**, to review the account reported by the current process and the new credentials on the host.
 4. Choose **Keep current session** or **Reload agent**.
@@ -39,6 +39,8 @@ Install this plugin once per host, using its default ID.
 Keeping the session leaves its process untouched. Reloading waits for an idle agent, closes only the matching monitored process, and asks Paseo to resume the **same Codex thread**. The plugin then reads the account from the replacement process. The dialog shows progress and errors; a success toast names the email reported by Codex.
 
 Detection requires two stable file observations. With an online client, the reminder usually appears within a few seconds. It does not open a modal automatically or automatically reload any agent.
+
+Paseo's plugin API does not currently expose the built-in context-window and quota tooltip. The account pill uses the official composer contribution point nearest that control; it does not inject DOM or patch the Paseo app.
 
 ### What account verification means
 

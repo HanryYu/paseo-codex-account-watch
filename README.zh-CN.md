@@ -20,12 +20,14 @@ paseo plugin add HanryYu/paseo-codex-account-watch
 
 ## 使用
 
-1. 在 Paseo 启动一个受监听的 Codex agent。
+1. 在 Paseo 启动一个受监听的 Codex agent。输入框上方会用紧凑入口显示当前账号，点击可打开该 host 的账号页面。
 2. 使用 CC Switch 等工具切换**同一 host** 的 Codex 账号。
 3. 输入框附近出现 **Codex account changed** 提醒。点击后显示旧进程报告的账号和 host 上的新凭据身份。
 4. **Keep current session** 保持现有进程；**Reload agent** 会先结束匹配的空闲进程，再由 Paseo 恢复原 Codex thread。
 
 刷新时显示进度和错误，成功提示会带上新进程实际报告的邮箱。运行中的回合、过期确认、线程不匹配、凭据不稳定或启动命令被外部修改都会阻止刷新。提醒不会自动弹窗，也不会自动重启 agent。
+
+Paseo 插件 API 暂未开放内置的上下文/额度 tooltip。账号使用官方 composer pill 入口显示在它附近，不注入 DOM，也不修改 Paseo 主程序。
 
 “保持原进程”不是冻结旧凭据：插件不会复制或固定 token，无法保证账号被撤销、token 到期或 Codex 自行重新认证后仍使用旧账号。
 

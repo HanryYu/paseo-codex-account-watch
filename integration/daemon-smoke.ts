@@ -179,6 +179,7 @@ async function main() {
     }
     assert.equal(status.enabled, true);
     assert.equal(status.sessions.length, 1);
+    assert.equal(status.sessions[0].currentAccountLabel, "first@example.test");
     assert.equal(status.sessions[0].previousLabel, "first@example.test");
     await writeFile(
       path.join(codexHome, "auth.json"),

@@ -9,6 +9,7 @@ const session: AccountSession = {
   title: "Title",
   runId: "run-a",
   threadId: "thread",
+  currentAccountLabel: "first@example.test",
   previousLabel: "first@example.test",
   nextLabel: "second@example.test",
   fingerprint: "second",

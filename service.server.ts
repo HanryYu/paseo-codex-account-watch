@@ -349,6 +349,7 @@ export class AccountService {
           title: agent.title ?? agent.id,
           runId: record.runId,
           threadId: record.threadId,
+          currentAccountLabel: actual?.label ?? null,
           previousLabel: actual?.label ?? "Runtime account unavailable",
           nextLabel: readable ? next!.label : "Waiting for stable credentials",
           fingerprint: readable ? next!.fingerprint : "",

@@ -6,6 +6,7 @@ export const SessionSchema = z.object({
   title: z.string(),
   runId: z.string(),
   threadId: z.string().nullable(),
+  currentAccountLabel: z.string().nullable(),
   previousLabel: z.string(),
   nextLabel: z.string(),
   fingerprint: z.string(),
