@@ -1,6 +1,12 @@
 import type { PluginContext } from "@getpaseo/plugin";
 import { MainSurface, contributeClient } from "./main.client";
-import { statusRpc, setupRpc, reloadRpc } from "./api.shared";
+import {
+  statusRpc,
+  setupRpc,
+  reloadRpc,
+  importProfilesRpc,
+  migrateProfileRpc,
+} from "./api.shared";
 import { getService, closeService } from "./service.server";
 
 export default function contribute(plugin: PluginContext) {
@@ -10,6 +16,12 @@ export default function contribute(plugin: PluginContext) {
   );
   plugin.handle(reloadRpc, (input, { paseo }) =>
     getService().reload(paseo, input),
+  );
+  plugin.handle(importProfilesRpc, ({ databasePath }, { paseo }) =>
+    getService().profiles.importCcSwitch(paseo, databasePath),
+  );
+  plugin.handle(migrateProfileRpc, (input, { paseo }) =>
+    getService().migrateProfile(paseo, input),
   );
   plugin.addSurface("main", MainSurface);
   plugin.addSidebarItem({

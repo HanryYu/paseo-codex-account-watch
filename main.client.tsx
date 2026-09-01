@@ -11,11 +11,14 @@ import {
 import { Icon, Modal, useToast } from "@getpaseo/plugin/react-native";
 import { sessionForOpenDialog } from "./notice.shared";
 import {
+  importProfilesRpc,
+  migrateProfileRpc,
   reloadRpc,
   setupRpc,
   statusRpc,
   type AccountSession,
 } from "./api.shared";
+import type { ProfileSummary } from "./profiles.shared";
 
 function Action({
   theme,
@@ -191,8 +194,140 @@ function AccountDialog({
   );
 }
 
-function createNotice(initial: AccountSession) {
-  let value = { session: initial, open: false };
+function ProfileDialog({
+  session,
+  profiles,
+  theme,
+  open,
+  onOpenChange,
+}: {
+  session: AccountSession;
+  profiles: ProfileSummary[];
+  theme: PluginTheme;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
+  const migrate = useRpc(migrateProfileRpc);
+  const toast = useToast();
+  const [selected, setSelected] = useState<string | null>(null);
+  const unavailable = session.busy || Boolean(session.problem);
+  const mutation = useMutation({
+    mutationFn: (profileId: string) =>
+      migrate({
+        agentId: session.agentId,
+        runId: session.runId,
+        profileId,
+        confirmedRestart: true,
+      }),
+    onSuccess(task) {
+      toast.show(
+        `Account migration ${task.id.slice(0, 8)} scheduled. This host is restarting.`,
+        { variant: "success" },
+      );
+      onOpenChange(false);
+    },
+  });
+  return (
+    <Modal
+      title="Choose Codex account"
+      icon={<Icon name="UsersRound" color={theme.colors.foreground} />}
+      open={open}
+      onOpenChange={(next) => {
+        if (!mutation.isPending) onOpenChange(next);
+      }}
+    >
+      <Modal.Content>
+        <View style={{ gap: 12 }}>
+          <Text style={{ color: theme.colors.foregroundMuted }}>
+            Switching restarts this Paseo host, imports the same Codex thread
+            under the selected account, and keeps the old agent closed as a
+            recovery copy. Every running agent on this host is interrupted.
+          </Text>
+          {session.busy ? (
+            <Text style={{ color: theme.colors.statusWarning }}>
+              Wait for the current turn to finish.
+            </Text>
+          ) : null}
+          {session.problem ? (
+            <Text style={{ color: theme.colors.statusWarning }}>
+              {session.problem}
+            </Text>
+          ) : null}
+          {profiles.length ? (
+            profiles.map((profile) => {
+              const current = profile.id === session.currentProfileId;
+              const chosen = profile.id === selected;
+              return (
+                <Pressable
+                  key={profile.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: chosen || current }}
+                  disabled={mutation.isPending || current || unavailable}
+                  onPress={() => {
+                    mutation.reset();
+                    setSelected(profile.id);
+                  }}
+                  style={{
+                    padding: 12,
+                    gap: 4,
+                    borderRadius: 8,
+                    backgroundColor:
+                      chosen || current
+                        ? theme.colors.surface1
+                        : theme.colors.surface2,
+                    opacity: current ? 0.6 : 1,
+                  }}
+                >
+                  <Text style={{ color: theme.colors.foreground }}>
+                    {profile.name}
+                    {current ? " · Current" : ""}
+                  </Text>
+                  <Text style={{ color: theme.colors.foregroundMuted }}>
+                    {profile.accountLabel}
+                  </Text>
+                </Pressable>
+              );
+            })
+          ) : (
+            <Text style={{ color: theme.colors.statusWarning }}>
+              Import CC Switch accounts first.
+            </Text>
+          )}
+          {mutation.error ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.colors.statusDanger }}
+            >
+              {mutation.error.message}
+            </Text>
+          ) : null}
+          <Action
+            theme={theme}
+            label={
+              mutation.isPending
+                ? "Restarting host…"
+                : "Restart host and switch"
+            }
+            disabled={!selected || mutation.isPending || unavailable}
+            onPress={() => {
+              if (selected) mutation.mutate(selected);
+            }}
+          />
+          <Action
+            theme={theme}
+            secondary
+            label="Cancel"
+            disabled={mutation.isPending}
+            onPress={() => onOpenChange(false)}
+          />
+        </View>
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+function createNotice(initial: AccountSession, profiles: ProfileSummary[]) {
+  let value = { session: initial, profiles, open: false };
   const listeners = new Set<() => void>();
   return {
     get: () => value,
@@ -202,8 +337,8 @@ function createNotice(initial: AccountSession) {
         listeners.delete(listener);
       };
     },
-    update(session: AccountSession) {
-      value = { ...value, session };
+    update(session: AccountSession, nextProfiles = value.profiles) {
+      value = { ...value, session, profiles: nextProfiles };
       for (const listener of listeners) listener();
     },
     open(open: boolean) {
@@ -237,20 +372,24 @@ export function contributeClient(client: PluginClientContext) {
         (item) => item.currentAccountLabel && item.workspaceId,
       )) {
         active.add(session.agentId);
-        const key = `${session.runId}:${session.currentAccountLabel}:${session.changed ? session.fingerprint : "current"}`;
+        const profilesKey = result.profiles
+          .map((profile) => `${profile.id}:${profile.updatedAt}`)
+          .join(",");
+        const key = `${session.runId}:${session.currentAccountLabel}:${session.changed ? session.fingerprint : "current"}:${profilesKey}`;
         const existing = entries.get(session.agentId);
         if (existing?.notice.get().open) {
           existing.notice.update(
             sessionForOpenDialog(existing.notice.get().session, session),
+            result.profiles,
           );
           continue;
         }
         if (existing?.key === key) {
-          if (session.changed) existing.notice.update(session);
+          if (session.changed) existing.notice.update(session, result.profiles);
           continue;
         }
         if (existing) void existing.remove();
-        const notice = createNotice(session);
+        const notice = createNotice(session, result.profiles);
         function AccountPill({ theme, layout }: PluginComposerPillProps) {
           const state = useSyncExternalStore(
             notice.subscribe,
@@ -290,7 +429,15 @@ export function contributeClient(client: PluginClientContext) {
                   open={state.open}
                   onOpenChange={notice.open}
                 />
-              ) : null}
+              ) : (
+                <ProfileDialog
+                  session={state.session}
+                  profiles={state.profiles}
+                  theme={theme}
+                  open={state.open}
+                  onOpenChange={notice.open}
+                />
+              )}
             </>
           );
         }
@@ -303,8 +450,7 @@ export function contributeClient(client: PluginClientContext) {
           agentId: session.agentId,
           Component: AccountPill,
           onPress() {
-            if (notice.get().session.changed) notice.open(true);
-            else client.openSurface("main");
+            notice.open(true);
           },
         });
         entries.set(session.agentId, { key, notice, remove });
@@ -349,6 +495,7 @@ export function contributeClient(client: PluginClientContext) {
 export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
   const getStatus = useRpc(statusRpc);
   const setup = useRpc(setupRpc);
+  const importProfiles = useRpc(importProfilesRpc);
   const toast = useToast();
   const queryClient = useQueryClient();
   const status = useQuery({
@@ -356,7 +503,9 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
     queryFn: () => getStatus({}),
     refetchInterval: 3000,
   });
-  const [confirm, setConfirm] = useState<"enable" | "restore" | null>(null);
+  const [confirm, setConfirm] = useState<
+    "enable" | "restore" | "import" | null
+  >(null);
   const [selected, setSelected] = useState<AccountSession | null>(null);
   const mutation = useMutation({
     mutationFn: (action: "enable" | "restore") =>
@@ -367,6 +516,19 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
       void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
     },
   });
+  const importMutation = useMutation({
+    mutationFn: () => importProfiles({ confirmed: true }),
+    onSuccess(result) {
+      toast.show(
+        `CC Switch accounts: ${result.imported} imported, ${result.updated} updated, ${result.skipped} skipped. Restart this Paseo host when idle to activate newly added providers.`,
+        { variant: "success" },
+      );
+      setConfirm(null);
+      void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
+    },
+  });
+  const confirmPending =
+    confirm === "import" ? importMutation.isPending : mutation.isPending;
   const styles = useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
@@ -445,6 +607,45 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
             use the monitored command. Restore the original command here before
             uninstalling this plugin.
           </Text>
+          <Action
+            theme={theme}
+            label="Import accounts from CC Switch"
+            secondary
+            onPress={() => {
+              importMutation.reset();
+              setConfirm("import");
+            }}
+          />
+          <Text style={styles.detail}>
+            Imported accounts become isolated Codex providers. Select one when
+            creating an agent after restarting this Paseo host; your system
+            Codex account is not replaced.
+          </Text>
+          {status.data.profiles.map((profile) => (
+            <View key={profile.id} style={styles.card}>
+              <Text style={styles.text}>{profile.name}</Text>
+              <Text selectable style={styles.detail}>
+                Account: {profile.accountLabel}
+              </Text>
+              <Text selectable style={styles.detail}>
+                Paseo provider: {profile.providerId}
+              </Text>
+            </View>
+          ))}
+          {status.data.migrations.slice(0, 3).map((task) => (
+            <View key={task.id} style={styles.card}>
+              <Text style={styles.text}>Migration · {task.title}</Text>
+              <Text style={styles.detail}>Status: {task.state}</Text>
+              {task.newAgentId ? (
+                <Text selectable style={styles.detail}>
+                  New agent: {task.newAgentId}
+                </Text>
+              ) : null}
+              {task.error ? (
+                <Text style={styles.error}>{task.error}</Text>
+              ) : null}
+            </View>
+          ))}
           {status.data.sessions.map((session) => (
             <View key={session.runId} style={styles.card}>
               <Text style={styles.text}>{session.title}</Text>
@@ -476,46 +677,56 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
       ) : null}
       <Modal
         title={
-          confirm === "restore"
-            ? "Restore Codex launches"
-            : "Enable monitored Codex launches"
+          confirm === "import"
+            ? "Import CC Switch accounts"
+            : confirm === "restore"
+              ? "Restore Codex launches"
+              : "Enable monitored Codex launches"
         }
         open={confirm !== null}
         onOpenChange={(open) => {
-          if (!open && !mutation.isPending) setConfirm(null);
+          if (!open && !confirmPending) setConfirm(null);
         }}
       >
         <Modal.Content>
           <View style={{ gap: 16 }}>
             <Text style={styles.text}>
-              {confirm === "restore"
-                ? "Restore the saved Codex command on this host. Existing processes are not stopped. If another tool changed the command, restoration is refused."
-                : "This changes only this host's Codex launch command to a transparent local monitor. It preserves the original command, reads account labels, and can stop a matching idle process only when you confirm an agent reload. Node.js 22+ is required. No Codex token is copied or stored by the plugin."}
+              {confirm === "import"
+                ? "Read Codex providers from ~/.cc-switch/cc-switch.db on this host. Valid credentials and provider configuration are copied into private, isolated CODEX_HOME directories. Raw credentials stay on this host and are never returned to the client. Official CC Switch rows without stored credentials are skipped."
+                : confirm === "restore"
+                  ? "Restore the saved Codex command on this host. Existing processes are not stopped. If another tool changed the command, restoration is refused."
+                  : "This changes only this host's Codex launch command to a transparent local monitor. It preserves the original command, reads account labels, and can stop a matching idle process only when you confirm an agent reload. Node.js 22+ is required. No Codex token is copied or stored by the plugin."}
             </Text>
-            {mutation.error ? (
+            {(confirm === "import" ? importMutation.error : mutation.error) ? (
               <Text accessibilityRole="alert" style={styles.error}>
-                {mutation.error.message}
+                {
+                  (confirm === "import" ? importMutation.error : mutation.error)
+                    ?.message
+                }
               </Text>
             ) : null}
             <Action
               theme={theme}
               label={
-                mutation.isPending
+                confirmPending
                   ? "Applying…"
-                  : confirm === "restore"
-                    ? "Restore command"
-                    : "Enable monitoring"
+                  : confirm === "import"
+                    ? "Import accounts"
+                    : confirm === "restore"
+                      ? "Restore command"
+                      : "Enable monitoring"
               }
-              disabled={mutation.isPending}
+              disabled={confirmPending}
               onPress={() => {
-                if (confirm) mutation.mutate(confirm);
+                if (confirm === "import") importMutation.mutate();
+                else if (confirm) mutation.mutate(confirm);
               }}
             />
             <Action
               theme={theme}
               secondary
               label="Cancel"
-              disabled={mutation.isPending}
+              disabled={confirmPending}
               onPress={() => setConfirm(null)}
             />
           </View>

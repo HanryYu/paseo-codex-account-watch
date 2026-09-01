@@ -23,4 +23,4 @@ jobs:
       - run: npm run typecheck
       - run: npm run format:check
       - run: npm test
-      - run: git diff --exit-code -- bridge-source.server.json
+      - run: git diff --exit-code -- bridge-source.server.json migration-runner-source.server.json

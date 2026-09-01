@@ -11,7 +11,7 @@ This is an independent, experimental plugin. It does not require a Paseo fork.
 Requirements on **each host running Codex**:
 
 - Paseo client and daemon with native plugin modals and composer pills. Tested with `0.7.0-beta.3`; earlier releases are not supported.
-- macOS or Linux, Node.js 22+, and the `paseo` and `codex` commands available to the daemon.
+- macOS or Linux, Node.js 22.13+, and the `paseo` and `codex` commands available to the daemon.
 - Codex app-server with `account/read`. Tested with Codex `0.149.1`.
 - File-backed Codex credentials in `CODEX_HOME/auth.json` (default: `~/.codex/auth.json`).
 
@@ -28,6 +28,20 @@ The confirmation changes only this host's built-in Codex provider command, using
 Existing processes are not taken over. Start a new Codex agent to test monitoring. Existing agents become monitored when Paseo next launches their process; if an unmonitored old session cannot reload, this plugin does not fix or terminate it.
 
 Install this plugin once per host, using its default ID.
+
+### Import CC Switch accounts
+
+Open **Codex accounts** and choose **Import accounts from CC Switch**. The plugin reads the host's default `~/.cc-switch/cc-switch.db` in read-only mode. Codex rows containing valid stored `auth` data are copied into host-private profile directories, and each profile is registered as a Paseo provider extending `codex` with its own `CODEX_HOME`.
+
+Click the account pill on an idle monitored agent and choose an imported account. After a second confirmation, the plugin persists a migration task, hardlinks that Codex thread's rollout into the target account home, and starts a detached runner. The runner restarts the exact Paseo host, imports the thread using `Codex · <CC Switch name>`, restores the agent title, and verifies the imported agent through the CLI. The original agent remains closed and unarchived as a recovery copy.
+
+The host restart interrupts every running agent on that host, so the action is disabled while the selected agent is busy and the confirmation states the host-wide effect. A failed import is retained as a visible migration record; it is never reported as a successful switch.
+
+The selected process reads and refreshes only the imported profile's credentials; it does not replace `~/.codex/auth.json` or CC Switch's database. Re-import to pick up changed CC Switch credentials or configuration. Runtime provider registration without a host restart is pending in [Paseo PR #2785](https://github.com/getpaseo/paseo/pull/2785).
+
+CC Switch's official provider row normally does not contain the active ChatGPT credential. Such rows are skipped rather than silently importing the global Codex account. Custom CC Switch data-directory overrides are not detected in this release.
+
+Paseo cannot mutate the provider of an existing agent. The plugin therefore creates a new Paseo agent for the same Codex thread after restart instead of rewriting the old agent record.
 
 ## Use
 
@@ -83,6 +97,7 @@ If the plugin was removed before restoring, reinstall it and use the restore act
 ## Boundaries and troubleshooting
 
 - Only the built-in `codex` provider is supported. Custom profiles/providers, Windows hosts, keychain-only credentials, and environment-only API credentials are not supported.
+- Imported CC Switch profiles extend the built-in `codex` provider and are supported. Other custom profiles/providers remain outside the monitor's scope.
 - The launcher must be able to run the original command. Commands with secret-bearing arguments are rejected instead of saving those arguments in plugin state.
 - Busy agents, stale confirmations, mismatched thread IDs, changed launch configuration, and uncertain account state block reload.
 - A failed restart is not reported as a successful switch. Retry is available if the old process stopped but Paseo failed to resume it. After a plugin/daemon restart, that in-memory retry context is lost; inspect the session before using Paseo's reload action.
@@ -103,6 +118,8 @@ npm run test:codex
 `npm test` covers identity parsing, token rotation, transient writes, configuration preservation, stale UI confirmation, and a real wrapper/child-process handoff with an exclusive-writer fixture.
 
 `test:daemon` starts a disposable Paseo daemon with synthetic credentials and a deterministic Codex fixture. It installs the plugin without `node_modules`, enables monitoring, detects A → B, rejects stale/concurrent/externally reconfigured reloads, resumes the same thread, verifies the fixture email, and restores the original command. It does not target your normal daemon.
+
+The same daemon test imports a synthetic CC Switch SQLite row, schedules an account migration, restarts only the disposable host, imports into the exact original workspace and thread under the isolated provider, and verifies the persisted migration result.
 
 Add `-- --git` to `npm run test:daemon` to install the public Git repository instead of the local source. This requires network access.
 

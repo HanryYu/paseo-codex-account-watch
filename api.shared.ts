@@ -32,3 +32,26 @@ export const reloadRpc = defineRpc({
     verification: z.enum(["email", "unavailable", "mismatch"]),
   }),
 });
+export const importProfilesRpc = defineRpc({
+  name: "accounts.profiles.import-cc-switch",
+  input: z.object({
+    confirmed: z.literal(true),
+    databasePath: z.string().min(1).optional(),
+  }),
+  output: z.object({
+    imported: z.number().int().nonnegative(),
+    updated: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    profiles: StatusSchema.shape.profiles,
+  }),
+});
+export const migrateProfileRpc = defineRpc({
+  name: "accounts.profiles.migrate-agent",
+  input: z.object({
+    agentId: z.string().min(1),
+    runId: z.string().uuid(),
+    profileId: z.string().uuid(),
+    confirmedRestart: z.literal(true),
+  }),
+  output: StatusSchema.shape.migrations.element,
+});

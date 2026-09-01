@@ -6,7 +6,7 @@
 
 ## 安装和启用
 
-运行 Codex 的每台 host 需要 macOS 或 Linux、Node.js 22+，并且 daemon 能找到 `paseo`、`codex` 命令。已测试 Paseo `0.7.0-beta.3` 和 Codex `0.149.1`，不支持更早的 Paseo 插件接口。
+运行 Codex 的每台 host 需要 macOS 或 Linux、Node.js 22.13+，并且 daemon 能找到 `paseo`、`codex` 命令。已测试 Paseo `0.7.0-beta.3` 和 Codex `0.149.1`，不支持更早的 Paseo 插件接口。
 
 先在 Paseo **Settings → Plugins** 开启插件，再执行：
 
@@ -17,6 +17,20 @@ paseo plugin add HanryYu/paseo-codex-account-watch
 进入侧栏 **Codex accounts**，点击 **Enable monitored Codex launches**，确认后插件会自动保存并修改这个 host 的 Codex 启动命令。安装本身不会修改启动配置；不需要手工编辑项目配置。其他 provider 和原有环境变量会保留。
 
 已运行的进程不会被接管。先新建一个 Codex agent 测试；已有 agent 要等到 Paseo 下一次启动它的进程后才会纳入监听。插件不会强制结束无法刷新的未监听旧进程。
+
+### 导入 CC Switch 账号
+
+在 **Codex accounts** 中选择 **Import accounts from CC Switch**。插件以只读方式打开当前 host 默认的 `~/.cc-switch/cc-switch.db`，把包含有效 `auth` 数据的 Codex provider 复制到 host 私有目录，并为每份数据创建一个具有独立 `CODEX_HOME` 的 Paseo Codex provider。
+
+点击空闲受监听 agent 的账号入口并选择导入账号。再次确认后，插件会先持久化迁移任务，把该 Codex thread 的 rollout 硬链接到目标账号目录，再启动独立 runner。runner 会重启准确的 Paseo host，使用 `Codex · <CC Switch 名称>` 自动导入原 thread、恢复 agent 名称，并通过 CLI 再次确认新 agent 存在。旧 agent 保持关闭且不归档，作为恢复副本。
+
+host 重启会中断该 host 上所有正在运行的 agent，因此所选 agent 忙碌时不能迁移，确认弹窗也会明确提示影响范围。导入失败会保留为可见迁移记录，不会显示切换成功。
+
+目标进程只会读取和刷新 profile 的凭据，不覆盖全局 `~/.codex/auth.json`，也不修改 CC Switch 数据库。重新导入可以同步凭据和配置。无需重启即可注册新 provider 的能力仍在 [Paseo PR #2785](https://github.com/getpaseo/paseo/pull/2785) 中。
+
+CC Switch 的官方 provider 行通常不保存当前 ChatGPT 凭据，插件会跳过，而不会把全局 Codex 账号冒充为已导入账号。本版也不会自动发现 CC Switch 的自定义数据目录。
+
+Paseo 当前不能修改既有 agent 的 provider，因此插件会在重启后为同一 Codex thread 创建新的 Paseo agent，而不是改写旧记录。
 
 ## 使用
 
@@ -64,3 +78,5 @@ paseo plugin remove paseo-codex-account-watch
 已完成类型检查、自动化测试、真实 Paseo 隔离 daemon 测试，以及真实 Codex 的只读 `account/read` 测试。UI 已检查英文版桌面深浅色弹窗和窄屏面板。
 
 没有用两个真实付费账号发送模型请求，也没有验证额度归属；原生 iOS/Android 和远程实体机器测试仍需补充。测试方式和实现边界见 [英文文档](README.md#development-and-validation)。
+
+隔离 daemon 测试还会导入合成的 CC Switch SQLite 账号、仅重启该测试 host，并确认迁移任务把相同 thread 导入到原 workspace 的独立 provider。

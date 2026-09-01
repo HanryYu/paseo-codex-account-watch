@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, writeFile, readFile, rm, cp } from "node:fs/promises";
 import { createServer } from "node:net";
+import { DatabaseSync } from "node:sqlite";
+import { MigrationTaskSchema } from "../migration.shared";
 import path from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -35,6 +37,32 @@ async function main() {
     path.join(codexHome, "auth.json"),
     credential("first@example.test"),
   );
+  const ccSwitchDatabase = path.join(root, "cc-switch.db");
+  const ccSwitch = new DatabaseSync(ccSwitchDatabase);
+  ccSwitch.exec(`
+    CREATE TABLE providers (
+      id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL,
+      settings_config TEXT NOT NULL, category TEXT, created_at INTEGER,
+      sort_index INTEGER, PRIMARY KEY (id, app_type)
+    )
+  `);
+  ccSwitch
+    .prepare(
+      "INSERT INTO providers (id, app_type, name, settings_config, category, created_at, sort_index) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      "fixture-profile",
+      "codex",
+      "Fixture Profile",
+      JSON.stringify({
+        auth: JSON.parse(credential("profile@example.test")),
+        config: "",
+      }),
+      "custom",
+      1,
+      1,
+    );
+  ccSwitch.close();
   const originalCommand = [
     process.execPath,
     path.resolve("fixtures/codex-fixture.mjs"),
@@ -114,13 +142,15 @@ async function main() {
   daemon.stderr.on("data", (chunk) => {
     startupOutput = (startupOutput + chunk).slice(-6000);
   });
-  const client = new DaemonClient({
-    url: `ws://${host}/ws`,
-    clientId: "plugin-integration",
-    clientType: "cli",
-    reconnect: { enabled: false },
-    connectTimeoutMs: 2000,
-  });
+  const createClient = () =>
+    new DaemonClient({
+      url: `ws://${host}/ws`,
+      clientId: "plugin-integration",
+      clientType: "cli",
+      reconnect: { enabled: false },
+      connectTimeoutMs: 2000,
+    });
+  let client = createClient();
   let projectId: string | undefined;
   try {
     for (let retry = 0; retry < 80; retry++) {
@@ -200,6 +230,22 @@ async function main() {
     assert.equal(pending.previousLabel, "first@example.test");
     assert.match(pending.nextLabel, /second@example.test/);
     if (ui) {
+      await writeFile(
+        path.join(codexHome, "auth.json"),
+        credential("first@example.test"),
+      );
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        status = StatusSchema.parse(
+          await client.invokePluginRpc(plugin.id, "accounts.status", {}),
+        );
+        if (!status.sessions[0]?.changed) break;
+      }
+      const imported = await client.invokePluginRpc(
+        plugin.id,
+        "accounts.profiles.import-cc-switch",
+        { confirmed: true, databasePath: ccSwitchDatabase },
+      );
       console.log(
         JSON.stringify({
           url: `http://${host}`,
@@ -207,6 +253,7 @@ async function main() {
           codexHome,
           workspaceId: workspace.workspace.id,
           agentId: agent.id,
+          imported,
           serverId: (
             await readFile(path.join(home, "server-id"), "utf8")
           ).trim(),
@@ -267,6 +314,95 @@ async function main() {
       label: "second@example.test",
       verification: "email",
     });
+    const imported = (await client.invokePluginRpc(
+      plugin.id,
+      "accounts.profiles.import-cc-switch",
+      { confirmed: true, databasePath: ccSwitchDatabase },
+    )) as {
+      imported: number;
+      profiles: Array<{ id: string; providerId: string }>;
+    };
+    assert.equal(imported.imported, 1);
+    const profileProvider = imported.profiles[0].providerId;
+    const importedProvider = (await client.getDaemonConfig()).config.providers[
+      profileProvider
+    ];
+    assert.equal(importedProvider.extends, "codex");
+    assert.equal(
+      JSON.stringify(importedProvider).includes("profile@example.test"),
+      true,
+    );
+    assert.equal(
+      JSON.stringify(importedProvider).includes("synthetic-token"),
+      false,
+    );
+    const sourceSession = path.join(
+      codexHome,
+      "sessions",
+      "2026",
+      "09",
+      "rollout-thread-test.jsonl",
+    );
+    await mkdir(path.dirname(sourceSession), { recursive: true });
+    await writeFile(sourceSession, '{"type":"session_meta"}\n');
+    status = StatusSchema.parse(
+      await client.invokePluginRpc(plugin.id, "accounts.status", {}),
+    );
+    const migration = (await client.invokePluginRpc(
+      plugin.id,
+      "accounts.profiles.migrate-agent",
+      {
+        agentId: agent.id,
+        runId: status.sessions.find((session) => session.agentId === agent.id)!
+          .runId,
+        profileId: imported.profiles[0].id,
+        confirmedRestart: true,
+      },
+    )) as { id: string };
+    const migrationPath = path.join(
+      home,
+      "plugin-data",
+      "codex-account-watch",
+      "migrations",
+      `${migration.id}.json`,
+    );
+    let migrationResult = null;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        migrationResult = MigrationTaskSchema.parse(
+          JSON.parse(await readFile(migrationPath, "utf8")),
+        );
+      } catch {
+        continue;
+      }
+      if (
+        migrationResult.state === "completed" ||
+        migrationResult.state === "failed"
+      )
+        break;
+    }
+    assert.equal(
+      migrationResult?.state,
+      "completed",
+      migrationResult?.error ?? undefined,
+    );
+    assert.ok(migrationResult?.newAgentId);
+    await client.close().catch(() => {});
+    client = createClient();
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try {
+        await client.connect();
+        break;
+      } catch {
+        if (attempt === 39)
+          throw new Error("Restarted daemon did not reconnect");
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    assert.equal(migrationResult?.providerId, profileProvider);
+    assert.equal(migrationResult?.workspaceId, workspace.workspace.id);
+    assert.equal(migrationResult?.threadId, "thread-test");
     const installedConfig = await client.getDaemonConfig();
     const installedCommand = installedConfig.config.providers.codex.command;
     await client.patchDaemonConfig({
@@ -298,7 +434,7 @@ async function main() {
     assert.deepEqual(persisted.agents.providers.codex.command, originalCommand);
     assert.equal(persisted.agents.providers.codex.env.CODEX_HOME, codexHome);
     console.log(
-      "隔离 daemon：无 node_modules 安装、自动配置、A→B 检测、拒绝过期确认、并发刷新去重、同 thread 切换、邮箱确认、外部配置保护与恢复通过。",
+      "隔离 daemon：无 node_modules 安装、自动配置、A→B 检测、CC Switch 导入、host 重启、同 workspace/thread 自动导入、拒绝过期确认、并发刷新去重、邮箱确认、外部配置保护与恢复通过。",
     );
     if (process.argv.includes("--exit-before-cleanup")) {
       await client.shutdownServer({ timeout: 3000 });

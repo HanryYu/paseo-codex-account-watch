@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { ProfileSummarySchema } from "./profiles.shared";
+import { MigrationSummarySchema } from "./migration.shared";
 
 export const SessionSchema = z.object({
   agentId: z.string(),
@@ -7,6 +9,7 @@ export const SessionSchema = z.object({
   runId: z.string(),
   threadId: z.string().nullable(),
   currentAccountLabel: z.string().nullable(),
+  currentProfileId: z.string().uuid().nullable(),
   previousLabel: z.string(),
   nextLabel: z.string(),
   fingerprint: z.string(),
@@ -22,5 +25,7 @@ export const StatusSchema = z.object({
   sessions: z.array(SessionSchema),
   unmonitoredCount: z.number(),
   note: z.string().nullable(),
+  profiles: z.array(ProfileSummarySchema),
+  migrations: z.array(MigrationSummarySchema),
 });
 export type WatchStatus = z.infer<typeof StatusSchema>;

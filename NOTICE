@@ -7,3 +7,7 @@ Copyright (c) 2025-present Mohamed Boudra
 Licensed under the Apache License, Version 2.0.
 
 This plugin is an independent project, not an official Paseo or OpenAI product.
+
+The isolated CODEX_HOME and hardlinked session-bridge design was informed by Orca:
+https://github.com/stablyai/orca
+Copyright (c) 2026 Lovecast Inc. Licensed under the MIT License.

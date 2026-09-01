@@ -16,6 +16,8 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import bridgeSource from "./bridge-source.server.json";
+import { ProfileStore } from "./profiles.server";
+import { bridgeThread, MigrationCoordinator } from "./migration.server";
 import { control } from "./control.server";
 import { readAuth, SettledAccount, type AccountIdentity } from "./auth.server";
 import {
@@ -92,12 +94,16 @@ export class AccountService {
   private writeTail = Promise.resolve();
   private reloads = new Set<string>();
   private closedForReload = new Map<string, RuntimeRecord>();
+  readonly profiles: ProfileStore;
+  readonly migrations: MigrationCoordinator;
 
   constructor(
     readonly home: string,
     private readonly processes: ProcessPort = processPort,
   ) {
     this.root = path.join(home, "plugin-data", "codex-account-watch");
+    this.profiles = new ProfileStore(this.root);
+    this.migrations = new MigrationCoordinator(this.root, this.home);
   }
 
   start() {
@@ -311,7 +317,13 @@ export class AccountService {
       agents.push(...result.entries.map((entry) => entry.agent));
       cursor = result.pageInfo.nextCursor ?? undefined;
     } while (cursor);
-    return agents.filter((agent) => agent.provider === "codex");
+    const profileProviders = new Set(
+      (await this.profiles.listRecords()).map((profile) => profile.providerId),
+    );
+    return agents.filter(
+      (agent) =>
+        agent.provider === "codex" || profileProviders.has(agent.provider),
+    );
   }
 
   async status(paseo: PaseoApi): Promise<WatchStatus> {
@@ -323,6 +335,7 @@ export class AccountService {
       this.agents(paseo),
     ]);
     const sessions: AccountSession[] = [];
+    const profileRecords = await this.profiles.listRecords();
     const commandOwned = Boolean(
       backup && same(config.providers.codex?.command, backup.installedCommand),
     );
@@ -350,6 +363,10 @@ export class AccountService {
           runId: record.runId,
           threadId: record.threadId,
           currentAccountLabel: actual?.label ?? null,
+          currentProfileId:
+            profileRecords.find(
+              (profile) => profile.home === path.dirname(record.authPath),
+            )?.id ?? null,
           previousLabel: actual?.label ?? "Runtime account unavailable",
           nextLabel: readable ? next!.label : "Waiting for stable credentials",
           fingerprint: readable ? next!.fingerprint : "",
@@ -393,6 +410,8 @@ export class AccountService {
         !same(config.providers.codex?.command, backup.installedCommand)
           ? "Codex launch configuration changed outside this plugin. It will not be overwritten."
           : null,
+      profiles: await this.profiles.list(),
+      migrations: await this.migrations.list(),
     };
   }
 
@@ -431,7 +450,16 @@ export class AccountService {
       const handle = paseo.agents.ref(input.agentId);
       await handle.refresh();
       const agent = handle.current();
-      if (!agent || agent.provider !== "codex" || agent.archivedAt)
+      const profileProviders = new Set(
+        (await this.profiles.listRecords()).map(
+          (profile) => profile.providerId,
+        ),
+      );
+      if (
+        !agent ||
+        (agent.provider !== "codex" && !profileProviders.has(agent.provider)) ||
+        agent.archivedAt
+      )
         throw safeMessage("An active Codex agent is required.");
       if (agent.status === "running" || agent.status === "initializing")
         throw safeMessage("Wait for the agent to finish before reloading.");
@@ -460,6 +488,10 @@ export class AccountService {
           "Credentials changed or are unavailable. Review the new account before retrying.",
         );
       const host = await this.reloadTarget();
+      if (!/^(localhost|127\.0\.0\.1|\[::1\]):\d+$/.test(host))
+        throw safeMessage(
+          "Account migration currently requires this host to use a loopback TCP listener.",
+        );
       const expectedServerId = (
         await readFile(path.join(this.home, "server-id"), "utf8")
       ).trim();
@@ -530,6 +562,89 @@ export class AccountService {
         label: actual?.label ?? "Unknown account",
         verification,
       } as const;
+    } finally {
+      this.reloads.delete(input.agentId);
+    }
+  }
+
+  async migrateProfile(
+    paseo: PaseoApi,
+    input: { agentId: string; runId: string; profileId: string },
+  ) {
+    if (this.reloads.has(input.agentId))
+      throw safeMessage("This agent is already changing accounts.");
+    this.reloads.add(input.agentId);
+    try {
+      await this.writeTail;
+      await this.requireOwnedCommand(paseo);
+      const handle = paseo.agents.ref(input.agentId);
+      await handle.refresh();
+      const agent = handle.current();
+      if (!agent || agent.archivedAt)
+        throw safeMessage("An active Codex agent is required.");
+      if (agent.status === "running" || agent.status === "initializing")
+        throw safeMessage(
+          "Wait for the agent to finish before changing accounts.",
+        );
+      if (!agent.workspaceId || !agent.cwd)
+        throw safeMessage(
+          "The agent must belong to a workspace with a working directory.",
+        );
+      const records = (await this.records()).filter(
+        (record) => record.agentId === input.agentId,
+      );
+      if (records.length !== 1 || records[0].runId !== input.runId)
+        throw safeMessage(
+          "The monitored session changed. Review it before retrying.",
+        );
+      const record = records[0];
+      const threadId = record.threadId;
+      if (!threadId || agent.runtimeInfo?.sessionId !== threadId)
+        throw safeMessage(
+          "The agent's Codex thread could not be matched safely.",
+        );
+      const profile = (await this.profiles.listRecords()).find(
+        (item) => item.id === input.profileId,
+      );
+      if (!profile)
+        throw safeMessage("The selected imported account no longer exists.");
+      if (path.dirname(record.authPath) === profile.home)
+        throw safeMessage("This agent already uses the selected account.");
+      const targetAuth = await readAuth(path.join(profile.home, "auth.json"));
+      if (
+        targetAuth.status !== "readable" ||
+        targetAuth.identity.fingerprint !== profile.fingerprint
+      )
+        throw safeMessage(
+          "The selected account credentials changed. Re-import CC Switch first.",
+        );
+      await bridgeThread(path.dirname(record.authPath), profile.home, threadId);
+      const host = await this.reloadTarget();
+      const backup = await this.backup();
+      const nodeExecutable = backup?.installedCommand[0];
+      if (!nodeExecutable || !path.isAbsolute(nodeExecutable))
+        throw safeMessage(
+          "The monitored Node.js launcher could not be resolved.",
+        );
+      const labels = Object.fromEntries(
+        Object.entries(agent.labels ?? {})
+          .filter(
+            ([key, value]) =>
+              key.length > 0 && key.length <= 128 && value.length <= 512,
+          )
+          .slice(0, 20),
+      );
+      return await this.migrations.schedule(nodeExecutable, {
+        sourceAgentId: agent.id,
+        workspaceId: agent.workspaceId,
+        threadId,
+        cwd: agent.cwd,
+        title: agent.title ?? profile.name,
+        profileId: profile.id,
+        providerId: profile.providerId,
+        host,
+        labels,
+      });
     } finally {
       this.reloads.delete(input.agentId);
     }
