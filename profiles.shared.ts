@@ -13,6 +13,7 @@ export type ProfileSummary = z.infer<typeof ProfileSummarySchema>;
 
 export const ProfileRecordSchema = ProfileSummarySchema.extend({
   version: z.literal(1),
+  customName: z.string().nullable().default(null),
   sourceProviderId: z.string(),
   home: z.string(),
   fingerprint: z.string(),

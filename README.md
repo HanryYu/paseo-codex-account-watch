@@ -35,11 +35,13 @@ Install this plugin once per host, using its default ID.
 
 Open **Codex accounts** and choose **Import accounts from CC Switch**. The plugin reads the host's default `~/.cc-switch/cc-switch.db` in read-only mode. Codex rows containing valid stored `auth` data are copied into host-private profile directories, and each profile is registered as a Paseo provider extending `codex` with its own `CODEX_HOME`.
 
+For a new agent, choose `Codex · <account name>` in Paseo's normal provider selector before sending the first message. Existing monitored agents can switch from the account pill. Imported account names can be edited under **Accounts**; the plugin updates the visible Paseo provider label without changing its ID, credentials, or isolated home. A custom name is preserved when CC Switch is synced again.
+
 Click the account pill on an idle monitored agent and choose an imported account. After a second confirmation, the plugin persists a migration task, hardlinks that Codex thread's rollout into the target account home, and starts a detached runner. The runner restarts the exact Paseo host, imports the thread using `Codex · <CC Switch name>`, restores the agent title, and verifies the imported agent through the CLI. The original agent remains closed and unarchived as a recovery copy.
 
 The host restart interrupts every running agent on that host, so the action is disabled while the selected agent is busy and the confirmation states the host-wide effect. A failed import is retained as a visible migration record; it is never reported as a successful switch.
 
-The selected process reads and refreshes only the imported profile's credentials; it does not replace `~/.codex/auth.json` or CC Switch's database. Re-import to pick up changed CC Switch credentials or configuration. Runtime provider registration without a host restart is pending in [Paseo PR #2785](https://github.com/getpaseo/paseo/pull/2785).
+The selected process reads and refreshes only the imported profile's credentials; it does not replace `~/.codex/auth.json` or CC Switch's database. Re-import to pick up changed CC Switch credentials or configuration.
 
 CC Switch's official provider row normally does not contain the active ChatGPT credential. Such rows are skipped rather than silently importing the global Codex account. Custom CC Switch data-directory overrides are not detected in this release.
 
@@ -55,6 +57,12 @@ Paseo cannot mutate the provider of an existing agent. The plugin therefore crea
 Keeping the session leaves its process untouched. Reloading waits for an idle agent, closes only the matching monitored process, and asks Paseo to resume the **same Codex thread**. The plugin then reads the account from the replacement process. The dialog shows progress and errors; a success toast names the email reported by Codex.
 
 Detection requires two stable file observations. With an online client, the reminder usually appears within a few seconds. It does not open a modal automatically or automatically reload any agent.
+
+### Preferences and language
+
+Preferences are stored privately on the selected host. You can show or hide the current-account composer pill and setup reminders for unmonitored agents. Account state uses a fixed five-second client refresh backed by a shared host cache, so opening the settings page or connecting additional clients does not multiply host scans.
+
+The plugin UI includes English and Simplified Chinese. **Automatic** uses Paseo's locale when the host exposes it to plugins and otherwise falls back to the client device locale. The current public Paseo plugin contract does not expose the app's explicit language preference, so a client whose Paseo language differs from its device language should choose an explicit plugin language. Sidebar and host-owned modal controls remain host strings because contribution titles are not locale-aware in the current contract.
 
 Paseo's plugin API does not currently expose the built-in context-window and quota tooltip. The account pill uses the official composer contribution point nearest that control; it does not inject DOM or patch the Paseo app.
 

@@ -336,6 +336,33 @@ async function main() {
       JSON.stringify(importedProvider).includes("synthetic-token"),
       false,
     );
+    const renamed = (await client.invokePluginRpc(
+      plugin.id,
+      "accounts.profiles.rename",
+      { profileId: imported.profiles[0].id, name: "Integration account" },
+    )) as { name: string; providerId: string };
+    assert.equal(renamed.name, "Integration account");
+    assert.equal(
+      (await client.getDaemonConfig()).config.providers[profileProvider].label,
+      "Codex · Integration account",
+    );
+    const settings = await client.invokePluginRpc(
+      plugin.id,
+      "accounts.settings.update",
+      { language: "zh-CN", showSetupPill: false },
+    );
+    assert.deepEqual(settings, {
+      version: 1,
+      language: "zh-CN",
+      showAccountPill: true,
+      showSetupPill: false,
+    });
+    assert.deepEqual(
+      StatusSchema.parse(
+        await client.invokePluginRpc(plugin.id, "accounts.status", {}),
+      ).settings,
+      settings,
+    );
     const sourceSession = path.join(
       codexHome,
       "sessions",

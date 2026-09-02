@@ -2,7 +2,9 @@ import React, { useMemo, useState, useSyncExternalStore } from "react";
 import {
   Pressable,
   ScrollView,
+  Switch,
   Text,
+  TextInput,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -20,11 +22,23 @@ import {
   importProfilesRpc,
   migrateProfileRpc,
   reloadRpc,
+  renameProfileRpc,
   setupRpc,
   statusRpc,
+  updateSettingsRpc,
   type AccountSession,
 } from "./api.shared";
 import type { ProfileSummary } from "./profiles.shared";
+import { resolveLocale, translator, type Translate } from "./i18n.client";
+import type { PluginLanguage, PluginSettingsPatch } from "./settings.shared";
+
+function localeFromProps(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const locale = (value as { locale?: unknown }).locale;
+  return typeof locale === "string" ? locale : undefined;
+}
+
+const STATUS_POLL_INTERVAL_MS = 5000;
 
 function Action({
   theme,
@@ -222,14 +236,182 @@ function SettingsRow({
   );
 }
 
+function ChoiceDialog<T extends string | number>({
+  theme,
+  title,
+  options,
+  value,
+  open,
+  pending,
+  error,
+  onSelect,
+  onOpenChange,
+}: {
+  theme: PluginTheme;
+  title: string;
+  options: Array<{ value: T; label: string }>;
+  value: T;
+  open: boolean;
+  pending: boolean;
+  error: Error | null;
+  onSelect(value: T): void;
+  onOpenChange(open: boolean): void;
+}) {
+  return (
+    <Modal
+      title={title}
+      open={open}
+      onOpenChange={(next) => {
+        if (!pending) onOpenChange(next);
+      }}
+    >
+      <Modal.Content>
+        <View style={{ gap: 8 }}>
+          {options.map((option) => {
+            const selected = option.value === value;
+            return (
+              <Pressable
+                key={String(option.value)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: selected }}
+                disabled={pending}
+                onPress={() => onSelect(option.value)}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 11,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: selected
+                    ? theme.colors.accent
+                    : theme.colors.border,
+                  backgroundColor: selected
+                    ? theme.colors.surface1
+                    : theme.colors.surface2,
+                }}
+              >
+                <Text style={{ color: theme.colors.foreground }}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+          {error ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.colors.statusDanger }}
+            >
+              {error.message}
+            </Text>
+          ) : null}
+        </View>
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+function RenameAccountDialog({
+  profile,
+  theme,
+  t,
+  open,
+  onOpenChange,
+}: {
+  profile: ProfileSummary;
+  theme: PluginTheme;
+  t: Translate;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
+  const rename = useRpc(renameProfileRpc);
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = useState(profile.name);
+  const mutation = useMutation({
+    mutationFn: () => rename({ profileId: profile.id, name }),
+    onSuccess(updated) {
+      toast.show(t("accountRenamed", { name: updated.name }), {
+        variant: "success",
+      });
+      void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
+      onOpenChange(false);
+    },
+  });
+  const normalized = name.trim().replace(/\s+/g, " ");
+  return (
+    <Modal
+      title={t("renameAccount")}
+      icon={<Icon name="Pencil" color={theme.colors.foreground} />}
+      open={open}
+      onOpenChange={(next) => {
+        if (!mutation.isPending) onOpenChange(next);
+      }}
+    >
+      <Modal.Content>
+        <View style={{ gap: 12 }}>
+          <Text style={{ color: theme.colors.foregroundMuted }}>
+            {t("accountName")}
+          </Text>
+          <TextInput
+            autoFocus
+            value={name}
+            maxLength={64}
+            placeholder={t("accountNamePlaceholder")}
+            placeholderTextColor={theme.colors.foregroundMuted}
+            onChangeText={(next) => {
+              mutation.reset();
+              setName(next);
+            }}
+            style={{
+              color: theme.colors.foreground,
+              backgroundColor: theme.colors.surface2,
+              borderColor: theme.colors.border,
+              borderWidth: 1,
+              borderRadius: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+            }}
+          />
+          {mutation.error ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.colors.statusDanger }}
+            >
+              {mutation.error.message}
+            </Text>
+          ) : null}
+          <Action
+            theme={theme}
+            label={mutation.isPending ? t("saving") : t("save")}
+            disabled={
+              mutation.isPending ||
+              normalized.length === 0 ||
+              normalized === profile.name
+            }
+            onPress={() => mutation.mutate()}
+          />
+          <Action
+            theme={theme}
+            secondary
+            label={t("cancel")}
+            disabled={mutation.isPending}
+            onPress={() => onOpenChange(false)}
+          />
+        </View>
+      </Modal.Content>
+    </Modal>
+  );
+}
+
 function AccountDialog({
   session,
   theme,
+  t,
   open,
   onOpenChange,
 }: {
   session: AccountSession;
   theme: PluginTheme;
+  t: Translate;
   open: boolean;
   onOpenChange(open: boolean): void;
 }) {
@@ -247,15 +429,11 @@ function AccountDialog({
     onSuccess(result) {
       void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
       if (result.verification === "email") {
-        toast.show(`Agent reloaded. Codex reports ${result.label}.`, {
+        toast.show(t("reloadedAs", { label: result.label }), {
           variant: "success",
         });
         onOpenChange(false);
-      } else
-        toast.show(
-          "Agent reloaded, but the expected account could not be verified.",
-          { variant: "warning" },
-        );
+      } else toast.show(t("reloadUnverified"), { variant: "warning" });
     },
   });
   const busy = session.busy;
@@ -263,7 +441,7 @@ function AccountDialog({
   const detail = { color: theme.colors.foregroundMuted };
   return (
     <Modal
-      title="Codex account changed"
+      title={t("accountChanged")}
       icon={<Icon name="UserRound" color={theme.colors.foreground} />}
       open={open}
       onOpenChange={(next) => {
@@ -273,28 +451,22 @@ function AccountDialog({
       <Modal.Content>
         <View style={{ gap: 16 }}>
           <View style={{ gap: 4 }}>
-            <Text style={detail}>Current process reports</Text>
+            <Text style={detail}>{t("currentProcessReports")}</Text>
             <Text selectable style={text}>
               {session.previousLabel}
             </Text>
           </View>
           <View style={{ gap: 4 }}>
-            <Text style={detail}>Credentials on this host now identify</Text>
+            <Text style={detail}>{t("credentialsNowIdentify")}</Text>
             <Text selectable style={text}>
               {session.nextLabel}
             </Text>
           </View>
-          <Text style={detail}>
-            Reload restarts this agent on the same Codex thread. Keeping the
-            session does not change or stop its current process.
-          </Text>
-          <Text style={detail}>
-            Codex verifies the email and account type. Its account/read API does
-            not expose the workspace ID or API key.
-          </Text>
+          <Text style={detail}>{t("reloadExplanation")}</Text>
+          <Text style={detail}>{t("verificationExplanation")}</Text>
           {busy && !session.problem ? (
             <Text style={{ color: theme.colors.statusWarning }}>
-              Wait for the current turn to finish.
+              {t("waitForTurn")}
             </Text>
           ) : null}
           {session.problem ? (
@@ -316,8 +488,9 @@ function AccountDialog({
               accessibilityRole="alert"
               style={{ color: theme.colors.statusWarning }}
             >
-              The process restarted and reports {mutation.data.label}, but the
-              expected account could not be verified.
+              {t("reloadUnverifiedDetail", {
+                label: mutation.data.label,
+              })}
             </Text>
           ) : null}
           <View style={{ gap: 8 }}>
@@ -325,10 +498,10 @@ function AccountDialog({
               theme={theme}
               label={
                 mutation.isPending
-                  ? "Reloading agent…"
+                  ? t("reloadingAgent")
                   : mutation.error
-                    ? "Retry reload"
-                    : "Reload agent"
+                    ? t("retryReload")
+                    : t("reloadAgent")
               }
               disabled={
                 busy ||
@@ -342,7 +515,7 @@ function AccountDialog({
             />
             <Action
               theme={theme}
-              label={mutation.data ? "Close" : "Keep current session"}
+              label={mutation.data ? t("close") : t("keepSession")}
               secondary
               disabled={mutation.isPending}
               onPress={() => onOpenChange(false)}
@@ -358,12 +531,14 @@ function ProfileDialog({
   session,
   profiles,
   theme,
+  t,
   open,
   onOpenChange,
 }: {
   session: AccountSession;
   profiles: ProfileSummary[];
   theme: PluginTheme;
+  t: Translate;
   open: boolean;
   onOpenChange(open: boolean): void;
 }) {
@@ -380,16 +555,15 @@ function ProfileDialog({
         confirmedRestart: true,
       }),
     onSuccess(task) {
-      toast.show(
-        `Account migration ${task.id.slice(0, 8)} scheduled. This host is restarting.`,
-        { variant: "success" },
-      );
+      toast.show(t("migrationScheduled", { id: task.id.slice(0, 8) }), {
+        variant: "success",
+      });
       onOpenChange(false);
     },
   });
   return (
     <Modal
-      title="Choose Codex account"
+      title={t("chooseAccount")}
       icon={<Icon name="UsersRound" color={theme.colors.foreground} />}
       open={open}
       onOpenChange={(next) => {
@@ -399,13 +573,11 @@ function ProfileDialog({
       <Modal.Content>
         <View style={{ gap: 12 }}>
           <Text style={{ color: theme.colors.foregroundMuted }}>
-            Switching restarts this Paseo host, imports the same Codex thread
-            under the selected account, and keeps the old agent closed as a
-            recovery copy. Every running agent on this host is interrupted.
+            {t("migrationExplanation")}
           </Text>
           {session.busy ? (
             <Text style={{ color: theme.colors.statusWarning }}>
-              Wait for the current turn to finish.
+              {t("waitForTurn")}
             </Text>
           ) : null}
           {session.problem ? (
@@ -440,7 +612,7 @@ function ProfileDialog({
                 >
                   <Text style={{ color: theme.colors.foreground }}>
                     {profile.name}
-                    {current ? " · Current" : ""}
+                    {current ? ` · ${t("current")}` : ""}
                   </Text>
                   <Text style={{ color: theme.colors.foregroundMuted }}>
                     {profile.accountLabel}
@@ -450,7 +622,7 @@ function ProfileDialog({
             })
           ) : (
             <Text style={{ color: theme.colors.statusWarning }}>
-              Import CC Switch accounts first.
+              {t("importFirst")}
             </Text>
           )}
           {mutation.error ? (
@@ -464,9 +636,7 @@ function ProfileDialog({
           <Action
             theme={theme}
             label={
-              mutation.isPending
-                ? "Restarting host…"
-                : "Restart host and switch"
+              mutation.isPending ? t("restartingHost") : t("restartAndSwitch")
             }
             disabled={!selected || mutation.isPending || unavailable}
             onPress={() => {
@@ -476,7 +646,7 @@ function ProfileDialog({
           <Action
             theme={theme}
             secondary
-            label="Cancel"
+            label={t("cancel")}
             disabled={mutation.isPending}
             onPress={() => onOpenChange(false)}
           />
@@ -508,17 +678,6 @@ function createNotice(initial: AccountSession, profiles: ProfileSummary[]) {
   };
 }
 
-function AccountSetupPill({ theme }: PluginComposerPillProps) {
-  return (
-    <>
-      <Icon name="UserRoundCog" size={14} color={theme.colors.statusWarning} />
-      <Text style={{ color: theme.colors.foregroundMuted }}>
-        Codex account setup
-      </Text>
-    </>
-  );
-}
-
 export function contributeClient(client: PluginClientContext) {
   const entries = new Map<
     string,
@@ -531,6 +690,7 @@ export function contributeClient(client: PluginClientContext) {
   const setupEntries = new Map<string, () => void | Promise<void>>();
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
+  let currentT = translator("en");
   const clear = () => {
     for (const entry of entries.values()) void entry.remove();
     entries.clear();
@@ -541,15 +701,20 @@ export function contributeClient(client: PluginClientContext) {
     try {
       const result = await client.rpc(statusRpc, {});
       if (stopped) return;
+      currentT = translator(resolveLocale(result.settings.language));
+      const t = currentT;
       const active = new Set<string>();
-      for (const session of result.sessions.filter(
-        (item) => item.currentAccountLabel && item.workspaceId,
-      )) {
+      const accountPillSessions = result.settings.showAccountPill
+        ? result.sessions.filter(
+            (item) => item.currentAccountLabel && item.workspaceId,
+          )
+        : [];
+      for (const session of accountPillSessions) {
         active.add(session.agentId);
         const profilesKey = result.profiles
           .map((profile) => `${profile.id}:${profile.updatedAt}`)
           .join(",");
-        const key = `${session.runId}:${session.currentAccountLabel}:${session.changed ? session.fingerprint : "current"}:${profilesKey}`;
+        const key = `${session.runId}:${session.currentAccountLabel}:${session.changed ? session.fingerprint : "current"}:${profilesKey}:${result.settings.language}`;
         const existing = entries.get(session.agentId);
         if (existing?.notice.get().open) {
           existing.notice.update(
@@ -564,13 +729,20 @@ export function contributeClient(client: PluginClientContext) {
         }
         if (existing) void existing.remove();
         const notice = createNotice(session, result.profiles);
-        function AccountPill({ theme, layout }: PluginComposerPillProps) {
+        function AccountPill(props: PluginComposerPillProps) {
+          const { theme, layout } = props;
+          const pillT = translator(
+            resolveLocale(result.settings.language, localeFromProps(props)),
+          );
           const state = useSyncExternalStore(
             notice.subscribe,
             notice.get,
             notice.get,
           );
           const changed = state.session.changed;
+          const currentProfile = state.profiles.find(
+            (profile) => profile.id === state.session.currentProfileId,
+          );
           return (
             <>
               <Icon
@@ -593,13 +765,14 @@ export function contributeClient(client: PluginClientContext) {
                 }}
               >
                 {changed
-                  ? "Codex account changed"
-                  : state.session.currentAccountLabel}
+                  ? pillT("accountChangedPill")
+                  : (currentProfile?.name ?? state.session.currentAccountLabel)}
               </Text>
               {changed ? (
                 <AccountDialog
                   session={state.session}
                   theme={theme}
+                  t={pillT}
                   open={state.open}
                   onOpenChange={notice.open}
                 />
@@ -608,6 +781,7 @@ export function contributeClient(client: PluginClientContext) {
                   session={state.session}
                   profiles={state.profiles}
                   theme={theme}
+                  t={pillT}
                   open={state.open}
                   onOpenChange={notice.open}
                 />
@@ -618,8 +792,15 @@ export function contributeClient(client: PluginClientContext) {
         const remove = client.addComposerPill({
           id: "account-status",
           title: session.changed
-            ? "Review Codex account change"
-            : `Current Codex account: ${session.currentAccountLabel}`,
+            ? t("reviewAccountChange")
+            : t("currentAccount", {
+                label:
+                  result.profiles.find(
+                    (profile) => profile.id === session.currentProfileId,
+                  )?.name ??
+                  session.currentAccountLabel ??
+                  "",
+              }),
           workspaceId: session.workspaceId,
           agentId: session.agentId,
           Component: AccountPill,
@@ -641,19 +822,37 @@ export function contributeClient(client: PluginClientContext) {
           }
         }
       }
-      const setupAgentIds = new Set(
-        result.unmonitoredAgents.map((agent) => agent.agentId),
-      );
-      for (const agent of result.unmonitoredAgents) {
+      const setupAgents = result.settings.showSetupPill
+        ? result.unmonitoredAgents
+        : [];
+      const setupAgentIds = new Set(setupAgents.map((agent) => agent.agentId));
+      for (const agent of setupAgents) {
         if (setupEntries.has(agent.agentId)) continue;
+        function SetupPill(props: PluginComposerPillProps) {
+          const setupT = translator(
+            resolveLocale(result.settings.language, localeFromProps(props)),
+          );
+          return (
+            <>
+              <Icon
+                name="UserRoundCog"
+                size={14}
+                color={props.theme.colors.statusWarning}
+              />
+              <Text style={{ color: props.theme.colors.foregroundMuted }}>
+                {setupT("setupPill")}
+              </Text>
+            </>
+          );
+        }
         setupEntries.set(
           agent.agentId,
           client.addComposerPill({
             id: "account-setup",
-            title: "Set up Codex account switching",
+            title: t("setupAccountSwitching"),
             workspaceId: agent.workspaceId,
             agentId: agent.agentId,
-            Component: AccountSetupPill,
+            Component: SetupPill,
             onPress() {
               client.openSurface("main");
             },
@@ -671,15 +870,14 @@ export function contributeClient(client: PluginClientContext) {
           entry.notice.update({
             ...entry.notice.get().session,
             busy: true,
-            problem:
-              "Cannot reach this host's account monitor. Reload is unavailable until it reconnects.",
+            problem: currentT("monitorUnavailable"),
           });
       }
     } finally {
       if (!stopped)
         timer = setTimeout(() => {
           void poll();
-        }, 3000);
+        }, STATUS_POLL_INTERVAL_MS);
     }
   };
   void poll();
@@ -690,27 +888,41 @@ export function contributeClient(client: PluginClientContext) {
   };
 }
 
-export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
+export function MainSurface(props: PluginSurfaceProps) {
+  const { theme, layout, host } = props;
   const { width } = useWindowDimensions();
   const getStatus = useRpc(statusRpc);
   const setup = useRpc(setupRpc);
   const importProfiles = useRpc(importProfilesRpc);
+  const updateSettings = useRpc(updateSettingsRpc);
   const toast = useToast();
   const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["account-watch", host.id],
     queryFn: () => getStatus({}),
-    refetchInterval: 3000,
+    refetchInterval: STATUS_POLL_INTERVAL_MS,
   });
+  const locale = resolveLocale(
+    status.data?.settings.language ?? "auto",
+    localeFromProps(props),
+  );
+  const t = translator(locale);
   const [confirm, setConfirm] = useState<
     "enable" | "restore" | "import" | null
   >(null);
   const [selected, setSelected] = useState<AccountSession | null>(null);
+  const [profileToRename, setProfileToRename] = useState<ProfileSummary | null>(
+    null,
+  );
+  const [preference, setPreference] = useState<"language" | null>(null);
   const mutation = useMutation({
     mutationFn: (action: "enable" | "restore") =>
       setup({ action, confirmed: true }),
-    onSuccess(result, action) {
-      toast.show(result.message, { variant: "success" });
+    onSuccess(_result, action) {
+      toast.show(
+        action === "enable" ? t("setupComplete") : t("restoreComplete"),
+        { variant: "success" },
+      );
       setConfirm(
         action === "enable" && status.data?.profiles.length === 0
           ? "import"
@@ -723,10 +935,25 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
     mutationFn: () => importProfiles({ confirmed: true }),
     onSuccess(result) {
       toast.show(
-        `CC Switch accounts: ${result.imported} imported, ${result.updated} updated, ${result.skipped} skipped. Open a monitored agent and click its account pill to switch.`,
+        t("importComplete", {
+          imported: result.imported,
+          updated: result.updated,
+          skipped: result.skipped,
+        }),
         { variant: "success" },
       );
       setConfirm(null);
+      void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
+    },
+  });
+  const settingsMutation = useMutation({
+    mutationFn: (patch: PluginSettingsPatch) => updateSettings(patch),
+    onSuccess(settings) {
+      const nextT = translator(
+        resolveLocale(settings.language, localeFromProps(props)),
+      );
+      toast.show(nextT("settingsSaved"), { variant: "success" });
+      setPreference(null);
       void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
     },
   });
@@ -758,13 +985,10 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
           <Text style={{ color: theme.colors.foreground, fontSize: 16 }}>
             {host.label}
           </Text>
-          <Text style={styles.detail}>
-            Configure isolated Codex accounts for this host. Credentials and
-            launch settings stay on the host you selected.
-          </Text>
+          <Text style={styles.detail}>{t("hostDescription")}</Text>
         </View>
         {status.isPending ? (
-          <Text style={styles.detail}>Checking this host…</Text>
+          <Text style={styles.detail}>{t("checkingHost")}</Text>
         ) : null}
         {status.error ? (
           <View style={{ gap: 12 }}>
@@ -775,7 +999,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
               theme={theme}
               secondary
               inline
-              label="Retry"
+              label={t("retry")}
               onPress={() => {
                 void status.refetch();
               }}
@@ -794,22 +1018,24 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                 {status.data.note}
               </Text>
             ) : null}
-            <SettingsSection theme={theme} title="Setup">
+            <SettingsSection theme={theme} title={t("setup")}>
               <SettingsRow
                 theme={theme}
                 compact={compactRows}
                 first
                 icon="TerminalSquare"
-                title="Agent launch integration"
-                description="Identifies the active account and enables safe agent restarts and thread migration."
-                status={launchIntegrationReady ? "Ready" : "Action required"}
+                title={t("launchIntegration")}
+                description={t("launchIntegrationDescription")}
+                status={
+                  launchIntegrationReady ? t("ready") : t("actionRequired")
+                }
                 statusTone={launchIntegrationReady ? "success" : "warning"}
                 action={
                   !launchIntegrationReady ? (
                     <Action
                       theme={theme}
                       inline
-                      label="Set up"
+                      label={t("setUp")}
                       disabled={
                         status.data.enabled && !status.data.commandOwned
                       }
@@ -825,16 +1051,24 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                 theme={theme}
                 compact={compactRows}
                 icon="UsersRound"
-                title="Accounts from CC Switch"
+                title={t("accountsFromCcSwitch")}
                 description={
                   status.data.profiles.length
-                    ? `${status.data.profiles.length} ${status.data.profiles.length === 1 ? "account" : "accounts"} stored privately on this host.`
-                    : "Import account profiles into isolated CODEX_HOME directories."
+                    ? t("accountsStored", {
+                        count: status.data.profiles.length,
+                        unit:
+                          status.data.profiles.length === 1
+                            ? t("accountUnit")
+                            : t("accountsUnit"),
+                      })
+                    : t("importAccountDescription")
                 }
                 status={
                   status.data.profiles.length
-                    ? `${status.data.profiles.length} imported`
-                    : "Not imported"
+                    ? t("importedCount", {
+                        count: status.data.profiles.length,
+                      })
+                    : t("notImported")
                 }
                 statusTone={status.data.profiles.length ? "success" : "muted"}
                 action={
@@ -842,7 +1076,9 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                     theme={theme}
                     inline
                     secondary={status.data.profiles.length > 0}
-                    label={status.data.profiles.length ? "Sync" : "Import"}
+                    label={
+                      status.data.profiles.length ? t("sync") : t("import")
+                    }
                     disabled={!launchIntegrationReady}
                     onPress={() => {
                       importMutation.reset();
@@ -855,24 +1091,34 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                 theme={theme}
                 compact={compactRows}
                 icon="Bot"
-                title="Codex agents"
+                title={t("codexAgents")}
                 description={
                   status.data.unmonitoredCount > 0
-                    ? `${status.data.unmonitoredCount} existing ${status.data.unmonitoredCount === 1 ? "agent needs" : "agents need"} to be started again or reloaded after setup.`
+                    ? t("agentsNeedReload", {
+                        count: status.data.unmonitoredCount,
+                        unit:
+                          status.data.unmonitoredCount === 1
+                            ? t("agentUnit")
+                            : t("agentsUnit"),
+                        verb:
+                          status.data.unmonitoredCount === 1
+                            ? t("needs")
+                            : t("need"),
+                      })
                     : status.data.sessions.length > 0
-                      ? "Use the account pill above an agent's message box to switch profiles."
-                      : "Start a new agent or reload an existing one after importing accounts."
+                      ? t("accountPillDescription")
+                      : t("startAgentDescription")
                 }
                 status={
                   status.data.sessions.length
-                    ? `${status.data.sessions.length} ready`
-                    : "None ready"
+                    ? t("readyCount", { count: status.data.sessions.length })
+                    : t("noneReady")
                 }
                 statusTone={status.data.sessions.length ? "success" : "muted"}
               />
             </SettingsSection>
 
-            <SettingsSection theme={theme} title="Accounts">
+            <SettingsSection theme={theme} title={t("accounts")}>
               {status.data.profiles.length ? (
                 status.data.profiles.map((profile, index) => (
                   <SettingsRow
@@ -882,9 +1128,20 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                     first={index === 0}
                     icon="UserRound"
                     title={profile.name}
-                    description={`${profile.accountLabel} · Imported from CC Switch`}
-                    status="Available"
+                    description={t("importedFromCcSwitch", {
+                      label: profile.accountLabel,
+                    })}
+                    status={t("available")}
                     statusTone="success"
+                    action={
+                      <Action
+                        theme={theme}
+                        inline
+                        secondary
+                        label={t("rename")}
+                        onPress={() => setProfileToRename(profile)}
+                      />
+                    }
                   />
                 ))
               ) : (
@@ -893,13 +1150,13 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                   compact={compactRows}
                   first
                   icon="UserRound"
-                  title="No imported accounts"
-                  description="Complete setup above, then import accounts from CC Switch."
+                  title={t("noImportedAccounts")}
+                  description={t("noImportedAccountsDescription")}
                 />
               )}
             </SettingsSection>
 
-            <SettingsSection theme={theme} title="Agents on this host">
+            <SettingsSection theme={theme} title={t("agentsOnHost")}>
               {status.data.sessions.length ? (
                 status.data.sessions.map((session, index) => (
                   <SettingsRow
@@ -912,14 +1169,20 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                     description={
                       session.problem
                         ? session.problem
-                        : `${session.previousLabel} · Runtime ${session.verification === "email" ? "verified" : session.verification}`
+                        : t("runtimeVerified", {
+                            label: session.previousLabel,
+                            verification:
+                              session.verification === "email"
+                                ? t("verified")
+                                : session.verification,
+                          })
                     }
                     status={
                       session.changed
-                        ? "Account changed"
+                        ? t("accountChangedStatus")
                         : session.busy
-                          ? "Busy"
-                          : "Current"
+                          ? t("busy")
+                          : t("current")
                     }
                     statusTone={
                       session.problem
@@ -933,7 +1196,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                         <Action
                           theme={theme}
                           inline
-                          label="Review"
+                          label={t("review")}
                           onPress={() => setSelected(session)}
                         />
                       ) : undefined
@@ -946,14 +1209,14 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                   compact={compactRows}
                   first
                   icon="Bot"
-                  title="No monitored agents"
-                  description="New or reloaded Codex agents will appear here when launch integration is ready."
+                  title={t("noMonitoredAgents")}
+                  description={t("noMonitoredAgentsDescription")}
                 />
               )}
             </SettingsSection>
 
             {status.data.migrations.length ? (
-              <SettingsSection theme={theme} title="Recent migrations">
+              <SettingsSection theme={theme} title={t("recentMigrations")}>
                 {status.data.migrations.slice(0, 3).map((task, index) => (
                   <SettingsRow
                     key={task.id}
@@ -965,8 +1228,8 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                     description={
                       task.error ??
                       (task.newAgentId
-                        ? `New agent ${task.newAgentId}`
-                        : "Host migration in progress")
+                        ? t("newAgent", { id: task.newAgentId })
+                        : t("migrationInProgress"))
                     }
                     status={task.state}
                     statusTone={task.error ? "danger" : "muted"}
@@ -975,21 +1238,101 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
               </SettingsSection>
             ) : null}
 
+            <SettingsSection theme={theme} title={t("preferences")}>
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                first
+                icon="Languages"
+                title={t("language")}
+                description={t("languageDescription")}
+                status={
+                  status.data.settings.language === "auto"
+                    ? t("automatic")
+                    : status.data.settings.language === "zh-CN"
+                      ? t("simplifiedChinese")
+                      : t("english")
+                }
+                action={
+                  <Action
+                    theme={theme}
+                    inline
+                    secondary
+                    label={t("change")}
+                    onPress={() => {
+                      settingsMutation.reset();
+                      setPreference("language");
+                    }}
+                  />
+                }
+              />
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                icon="BadgeUser"
+                title={t("accountPillSetting")}
+                description={t("accountPillSettingDescription")}
+                status={
+                  status.data.settings.showAccountPill
+                    ? t("enabled")
+                    : t("disabled")
+                }
+                action={
+                  <Switch
+                    accessibilityLabel={t("accountPillSetting")}
+                    value={status.data.settings.showAccountPill}
+                    disabled={settingsMutation.isPending}
+                    onValueChange={(showAccountPill) =>
+                      settingsMutation.mutate({ showAccountPill })
+                    }
+                  />
+                }
+              />
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                icon="BellDot"
+                title={t("setupPillSetting")}
+                description={t("setupPillSettingDescription")}
+                status={
+                  status.data.settings.showSetupPill
+                    ? t("enabled")
+                    : t("disabled")
+                }
+                action={
+                  <Switch
+                    accessibilityLabel={t("setupPillSetting")}
+                    value={status.data.settings.showSetupPill}
+                    disabled={settingsMutation.isPending}
+                    onValueChange={(showSetupPill) =>
+                      settingsMutation.mutate({ showSetupPill })
+                    }
+                  />
+                }
+              />
+            </SettingsSection>
+
+            {settingsMutation.error ? (
+              <Text accessibilityRole="alert" style={styles.error}>
+                {settingsMutation.error.message}
+              </Text>
+            ) : null}
+
             {launchIntegrationReady ? (
-              <SettingsSection theme={theme} title="Advanced">
+              <SettingsSection theme={theme} title={t("advanced")}>
                 <SettingsRow
                   theme={theme}
                   compact={compactRows}
                   first
                   icon="Undo2"
-                  title="Restore original launch command"
-                  description="Remove the account wrapper for future Codex processes on this host."
+                  title={t("restoreLaunchCommand")}
+                  description={t("restoreLaunchCommandDescription")}
                   action={
                     <Action
                       theme={theme}
                       inline
                       secondary
-                      label="Restore"
+                      label={t("restore")}
                       onPress={() => {
                         mutation.reset();
                         setConfirm("restore");
@@ -1005,10 +1348,10 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
       <Modal
         title={
           confirm === "import"
-            ? "Import CC Switch accounts"
+            ? t("importAccountsTitle")
             : confirm === "restore"
-              ? "Restore Codex launches"
-              : "Set up account switching"
+              ? t("restoreLaunchesTitle")
+              : t("setupSwitchingTitle")
         }
         open={confirm !== null}
         onOpenChange={(open) => {
@@ -1019,10 +1362,10 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
           <View style={{ gap: 16 }}>
             <Text style={styles.text}>
               {confirm === "import"
-                ? "Read Codex providers from ~/.cc-switch/cc-switch.db on this host. Valid credentials and provider configuration are copied into private, isolated CODEX_HOME directories. Raw credentials stay on this host and are never returned to the client. Official CC Switch rows without stored credentials are skipped."
+                ? t("importConfirmation")
                 : confirm === "restore"
-                  ? "Restore the saved Codex command on this host. Existing processes are not stopped. If another tool changed the command, restoration is refused."
-                  : "The plugin will configure this host's Codex launch command through Paseo. Future Codex processes run through a transparent local wrapper that reports the active account and enables safe restart and thread migration. The original command is saved and can be restored here. Existing processes are not interrupted. No terminal setup is required."}
+                  ? t("restoreConfirmation")
+                  : t("setupConfirmation")}
             </Text>
             {(confirm === "import" ? importMutation.error : mutation.error) ? (
               <Text accessibilityRole="alert" style={styles.error}>
@@ -1036,12 +1379,12 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
               theme={theme}
               label={
                 confirmPending
-                  ? "Applying…"
+                  ? t("applying")
                   : confirm === "import"
-                    ? "Import accounts"
+                    ? t("importAccounts")
                     : confirm === "restore"
-                      ? "Restore command"
-                      : "Continue setup"
+                      ? t("restoreCommand")
+                      : t("continueSetup")
               }
               disabled={confirmPending}
               onPress={() => {
@@ -1052,7 +1395,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
             <Action
               theme={theme}
               secondary
-              label="Cancel"
+              label={t("cancel")}
               disabled={confirmPending}
               onPress={() => setConfirm(null)}
             />
@@ -1069,11 +1412,45 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
             ),
           )}
           theme={theme}
+          t={t}
           open
           onOpenChange={(open) => {
             if (!open) setSelected(null);
           }}
         />
+      ) : null}
+      {profileToRename ? (
+        <RenameAccountDialog
+          key={`${profileToRename.id}:${profileToRename.updatedAt}`}
+          profile={profileToRename}
+          theme={theme}
+          t={t}
+          open
+          onOpenChange={(open) => {
+            if (!open) setProfileToRename(null);
+          }}
+        />
+      ) : null}
+      {status.data ? (
+        <>
+          <ChoiceDialog<PluginLanguage>
+            theme={theme}
+            title={t("language")}
+            options={[
+              { value: "auto", label: t("automatic") },
+              { value: "en", label: t("english") },
+              { value: "zh-CN", label: t("simplifiedChinese") },
+            ]}
+            value={status.data.settings.language}
+            open={preference === "language"}
+            pending={settingsMutation.isPending}
+            error={settingsMutation.error}
+            onSelect={(language) => settingsMutation.mutate({ language })}
+            onOpenChange={(open) => {
+              if (!open) setPreference(null);
+            }}
+          />
+        </>
       ) : null}
     </ScrollView>
   );

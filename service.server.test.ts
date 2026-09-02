@@ -117,3 +117,44 @@ test("credential-bearing argv is rejected before configuration is saved", async 
     await f.close();
   }
 });
+
+test("shares status work across clients and invalidates after settings change", async () => {
+  const home = await mkdtemp(
+    path.join(os.tmpdir(), "account-status-cache-test-"),
+  );
+  let configReads = 0;
+  let agentReads = 0;
+  const paseo = {
+    config: {
+      async get() {
+        configReads++;
+        return { config: { providers: { codex: {} } } };
+      },
+    },
+    agents: {
+      async list() {
+        agentReads++;
+        return { entries: [], pageInfo: { nextCursor: null } };
+      },
+    },
+  } as unknown as PaseoApi;
+  const service = new AccountService(home);
+  try {
+    const [first, second] = await Promise.all([
+      service.status(paseo),
+      service.status(paseo),
+    ]);
+    assert.deepEqual(first, second);
+    await service.status(paseo);
+    assert.equal(configReads, 1);
+    assert.equal(agentReads, 1);
+    await service.updateSettings({ showSetupPill: false });
+    const refreshed = await service.status(paseo);
+    assert.equal(refreshed.settings.showSetupPill, false);
+    assert.equal(configReads, 2);
+    assert.equal(agentReads, 2);
+  } finally {
+    service.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});

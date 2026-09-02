@@ -18,6 +18,7 @@ import { z } from "zod";
 import bridgeSource from "./bridge-source.server.json";
 import { ProfileStore } from "./profiles.server";
 import { bridgeThread, MigrationCoordinator } from "./migration.server";
+import { SettingsStore } from "./settings.server";
 import { control } from "./control.server";
 import { readAuth, SettledAccount, type AccountIdentity } from "./auth.server";
 import {
@@ -36,6 +37,7 @@ const BackupSchema = z.object({
 const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 const safeMessage = (message: string) => new Error(message);
+const STATUS_CACHE_MS = 5000;
 
 export function localReloadEndpoint(target: unknown): string {
   if (typeof target !== "string")
@@ -94,8 +96,11 @@ export class AccountService {
   private writeTail = Promise.resolve();
   private reloads = new Set<string>();
   private closedForReload = new Map<string, RuntimeRecord>();
+  private statusCache: { value: WatchStatus; expiresAt: number } | null = null;
+  private statusRequest: Promise<WatchStatus> | null = null;
   readonly profiles: ProfileStore;
   readonly migrations: MigrationCoordinator;
+  readonly settings: SettingsStore;
 
   constructor(
     readonly home: string,
@@ -104,6 +109,7 @@ export class AccountService {
     this.root = path.join(home, "plugin-data", "codex-account-watch");
     this.profiles = new ProfileStore(this.root);
     this.migrations = new MigrationCoordinator(this.root, this.home);
+    this.settings = new SettingsStore(this.root);
   }
 
   start() {
@@ -118,6 +124,10 @@ export class AccountService {
     this.stopped = true;
     if (this.loop) clearInterval(this.loop);
     this.loop = null;
+  }
+
+  private invalidateStatus() {
+    this.statusCache = null;
   }
 
   private async records(): Promise<RuntimeRecord[]> {
@@ -151,17 +161,25 @@ export class AccountService {
       const paths = new Set(
         (await this.records()).map((item) => item.authPath),
       );
+      let statusChanged = paths.size !== this.settled.size;
       for (const file of paths) {
-        const state = this.settled.get(file) ?? new SettledAccount();
+        const existing = this.settled.get(file);
+        if (!existing) statusChanged = true;
+        const state = existing ?? new SettledAccount();
         this.settled.set(file, state);
         const changed = state.accept(await readAuth(file));
-        if (changed) this.latest.set(file, changed);
+        if (changed) {
+          this.latest.set(file, changed);
+          statusChanged = true;
+        }
       }
       for (const file of this.settled.keys())
         if (!paths.has(file)) {
           this.settled.delete(file);
           this.latest.delete(file);
+          statusChanged = true;
         }
+      if (statusChanged) this.invalidateStatus();
     } catch {
       /* Status RPC reports inaccessible state; polling never logs account data. */
     } finally {
@@ -303,6 +321,7 @@ export class AccountService {
     });
     this.writeTail = operation.catch(() => {});
     await operation;
+    this.invalidateStatus();
     return result;
   }
 
@@ -328,6 +347,21 @@ export class AccountService {
 
   async status(paseo: PaseoApi): Promise<WatchStatus> {
     this.start();
+    if (this.statusCache && this.statusCache.expiresAt > Date.now())
+      return this.statusCache.value;
+    if (this.statusRequest) return this.statusRequest;
+    const request = this.computeStatus(paseo);
+    this.statusRequest = request;
+    try {
+      const value = await request;
+      this.statusCache = { value, expiresAt: Date.now() + STATUS_CACHE_MS };
+      return value;
+    } finally {
+      if (this.statusRequest === request) this.statusRequest = null;
+    }
+  }
+
+  private async computeStatus(paseo: PaseoApi): Promise<WatchStatus> {
     const [{ config }, backup, records, agents] = await Promise.all([
       paseo.config.get(),
       this.backup(),
@@ -426,7 +460,26 @@ export class AccountService {
           : null,
       profiles: await this.profiles.list(),
       migrations: await this.migrations.list(),
+      settings: await this.settings.read(),
     };
+  }
+
+  async importProfiles(paseo: PaseoApi, databasePath?: string) {
+    const result = await this.profiles.importCcSwitch(paseo, databasePath);
+    this.invalidateStatus();
+    return result;
+  }
+
+  async renameProfile(paseo: PaseoApi, profileId: string, name: string) {
+    const result = await this.profiles.rename(paseo, profileId, name);
+    this.invalidateStatus();
+    return result;
+  }
+
+  async updateSettings(input: Parameters<SettingsStore["update"]>[0]) {
+    const result = await this.settings.update(input);
+    this.invalidateStatus();
+    return result;
   }
 
   private async reloadTarget(): Promise<string> {
@@ -578,6 +631,7 @@ export class AccountService {
       } as const;
     } finally {
       this.reloads.delete(input.agentId);
+      this.invalidateStatus();
     }
   }
 
@@ -661,6 +715,7 @@ export class AccountService {
       });
     } finally {
       this.reloads.delete(input.agentId);
+      this.invalidateStatus();
     }
   }
 }

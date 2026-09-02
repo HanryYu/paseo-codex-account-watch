@@ -6,6 +6,8 @@ import {
   reloadRpc,
   importProfilesRpc,
   migrateProfileRpc,
+  renameProfileRpc,
+  updateSettingsRpc,
 } from "./api.shared";
 import { getService, closeService } from "./service.server";
 
@@ -18,7 +20,13 @@ export default function contribute(plugin: PluginContext) {
     getService().reload(paseo, input),
   );
   plugin.handle(importProfilesRpc, ({ databasePath }, { paseo }) =>
-    getService().profiles.importCcSwitch(paseo, databasePath),
+    getService().importProfiles(paseo, databasePath),
+  );
+  plugin.handle(renameProfileRpc, (input, { paseo }) =>
+    getService().renameProfile(paseo, input.profileId, input.name),
+  );
+  plugin.handle(updateSettingsRpc, (input) =>
+    getService().updateSettings(input),
   );
   plugin.handle(migrateProfileRpc, (input, { paseo }) =>
     getService().migrateProfile(paseo, input),

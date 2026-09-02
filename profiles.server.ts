@@ -164,6 +164,77 @@ export class ProfileStore {
     return (await this.listRecords()).map(summary);
   }
 
+  async rename(
+    paseo: Pick<PaseoApi, "config">,
+    profileId: string,
+    requestedName: string,
+  ): Promise<ProfileSummary> {
+    let result!: ProfileSummary;
+    const operation = this.writeTail.then(async () => {
+      const name = requestedName.trim().replace(/\s+/g, " ");
+      if (!name || name.length > 64)
+        throw new Error("Account names must contain 1 to 64 characters.");
+      const profiles = await this.listRecords();
+      const index = profiles.findIndex((profile) => profile.id === profileId);
+      if (index === -1)
+        throw new Error("The imported account no longer exists.");
+      if (
+        profiles.some(
+          (profile, candidateIndex) =>
+            candidateIndex !== index &&
+            profile.name.localeCompare(name, undefined, {
+              sensitivity: "accent",
+            }) === 0,
+        )
+      )
+        throw new Error("Another imported account already uses this name.");
+      const profile = profiles[index];
+      const { config } = await paseo.config.get();
+      const provider = config.providers[profile.providerId];
+      const providerEnv = provider?.env as Record<string, unknown> | undefined;
+      if (
+        !provider ||
+        provider.extends !== "codex" ||
+        providerEnv?.CODEX_HOME !== profile.home
+      )
+        throw new Error(
+          "The imported account provider changed outside this plugin. Rename was refused.",
+        );
+      const updated: ProfileRecord = {
+        ...profile,
+        name,
+        customName: name,
+        updatedAt: new Date().toISOString(),
+      };
+      const next = [...profiles];
+      next[index] = updated;
+      await paseo.config.patch({
+        providers: {
+          [profile.providerId]: {
+            ...provider,
+            label: `Codex · ${name}`,
+            description: `Isolated account imported from CC Switch (${profile.accountLabel})`,
+          },
+        },
+      });
+      try {
+        await atomic(
+          path.join(this.directory, "profiles.json"),
+          JSON.stringify(next),
+        );
+      } catch (error) {
+        await paseo.config
+          .patch({ providers: { [profile.providerId]: provider } })
+          .catch(() => {});
+        throw error;
+      }
+      result = summary(updated);
+    });
+    this.writeTail = operation.catch(() => {});
+    await operation;
+    return result;
+  }
+
   async importCcSwitch(paseo: Pick<PaseoApi, "config">, databasePath?: string) {
     let result!: {
       imported: number;
@@ -254,7 +325,8 @@ export class ProfileStore {
           version: 1,
           id,
           providerId: paseoProviderId,
-          name: candidate.name,
+          name: prior?.customName ?? candidate.name,
+          customName: prior?.customName ?? null,
           accountLabel: candidate.accountLabel,
           authKind: candidate.authKind,
           source: "cc-switch",
@@ -266,7 +338,7 @@ export class ProfileStore {
         };
         providerPatch[paseoProviderId] = {
           extends: "codex",
-          label: `Codex · ${candidate.name}`,
+          label: `Codex · ${profile.name}`,
           description: `Isolated account imported from CC Switch (${candidate.accountLabel})`,
           env: { CODEX_HOME: home },
         };

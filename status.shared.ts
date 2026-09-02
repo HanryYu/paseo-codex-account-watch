@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ProfileSummarySchema } from "./profiles.shared";
 import { MigrationSummarySchema } from "./migration.shared";
+import { PluginSettingsSchema } from "./settings.shared";
 
 export const SessionSchema = z.object({
   agentId: z.string(),
@@ -33,5 +34,6 @@ export const StatusSchema = z.object({
   note: z.string().nullable(),
   profiles: z.array(ProfileSummarySchema),
   migrations: z.array(MigrationSummarySchema),
+  settings: PluginSettingsSchema,
 });
 export type WatchStatus = z.infer<typeof StatusSchema>;

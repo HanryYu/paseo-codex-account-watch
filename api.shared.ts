@@ -2,6 +2,10 @@ import { defineRpc } from "@getpaseo/plugin/server";
 import { z } from "zod";
 
 import { StatusSchema } from "./status.shared";
+import {
+  PluginSettingsPatchSchema,
+  PluginSettingsSchema,
+} from "./settings.shared";
 export type { AccountSession, WatchStatus } from "./status.shared";
 
 export const statusRpc = defineRpc({
@@ -44,6 +48,19 @@ export const importProfilesRpc = defineRpc({
     skipped: z.number().int().nonnegative(),
     profiles: StatusSchema.shape.profiles,
   }),
+});
+export const renameProfileRpc = defineRpc({
+  name: "accounts.profiles.rename",
+  input: z.object({
+    profileId: z.string().uuid(),
+    name: z.string().trim().min(1).max(64),
+  }),
+  output: StatusSchema.shape.profiles.element,
+});
+export const updateSettingsRpc = defineRpc({
+  name: "accounts.settings.update",
+  input: PluginSettingsPatchSchema,
+  output: PluginSettingsSchema,
 });
 export const migrateProfileRpc = defineRpc({
   name: "accounts.profiles.migrate-agent",

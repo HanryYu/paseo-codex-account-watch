@@ -140,6 +140,48 @@ test("imports valid CC Switch Codex rows into isolated homes without exposing cr
       first.profiles.map((item) => item.id).sort(),
     );
 
+    const personal = second.profiles.find((profile) =>
+      profile.accountLabel.includes("person@example.test"),
+    )!;
+    const renamed = await store.rename(paseo, personal.id, "  Client   work  ");
+    assert.equal(renamed.name, "Client work");
+    assert.equal(
+      (providers[personal.providerId] as { label: string }).label,
+      "Codex · Client work",
+    );
+    assert.equal(
+      (await store.listRecords()).find((profile) => profile.id === personal.id)
+        ?.customName,
+      "Client work",
+    );
+    const synced = await store.importCcSwitch(paseo, databasePath);
+    assert.equal(
+      synced.profiles.find((profile) => profile.id === personal.id)?.name,
+      "Client work",
+    );
+    const other = synced.profiles.find(
+      (profile) => profile.id !== personal.id,
+    )!;
+    await assert.rejects(
+      store.rename(paseo, personal.id, other.name),
+      /already uses this name/,
+    );
+    const ownedProvider = providers[personal.providerId] as {
+      env: { CODEX_HOME: string };
+    };
+    providers[personal.providerId] = {
+      ...ownedProvider,
+      env: { CODEX_HOME: path.join(root, "changed-outside") },
+    };
+    await assert.rejects(
+      store.rename(paseo, personal.id, "Refused"),
+      /changed outside/,
+    );
+    assert.equal(
+      (await store.list()).find((profile) => profile.id === personal.id)?.name,
+      "Client work",
+    );
+
     const link = path.join(root, "database-link.db");
     await symlink(databasePath, link);
     await assert.rejects(store.importCcSwitch(paseo, link), /symlinks/);
