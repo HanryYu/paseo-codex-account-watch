@@ -21,9 +21,11 @@ Enable plugins in Paseo's **Settings → Plugins**, then run:
 paseo plugin add HanryYu/paseo-codex-account-watch
 ```
 
-Open **Codex accounts** in the sidebar. Choose **Enable monitored Codex launches** and confirm. Installation alone does not change the launch command.
+Open **Codex accounts** in the sidebar. Confirm the selected host, choose **Set up account switching**, and follow the import prompt. Installation alone does not change the launch command or copy credentials.
 
 The confirmation changes only this host's built-in Codex provider command, using Paseo's configuration API. It saves the effective original argv and wraps future launches in a local monitor. Provider environment variables and other providers are preserved. No project configuration or Codex credential is written.
+
+Paseo's plugin API does not currently expose host-settings sections or native Settings navigation. The sidebar surface remains host-scoped: Paseo owns its host picker, and every action runs only against the selected host. Unmonitored Codex agents show a **Codex account setup** composer pill that opens this surface.
 
 Existing processes are not taken over. Start a new Codex agent to test monitoring. Existing agents become monitored when Paseo next launches their process; if an unmonitored old session cannot reload, this plugin does not fix or terminate it.
 

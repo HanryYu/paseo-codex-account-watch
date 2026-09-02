@@ -400,11 +400,25 @@ export class AccountService {
         /* Dead or disconnected wrappers are not represented as verified sessions. */
       }
     }
+    const monitoredAgentIds = new Set(
+      sessions.map((session) => session.agentId),
+    );
+    const unmonitoredAgents = agents
+      .filter(
+        (agent) =>
+          !monitoredAgentIds.has(agent.id) && Boolean(agent.workspaceId),
+      )
+      .map((agent) => ({
+        agentId: agent.id,
+        workspaceId: agent.workspaceId!,
+        title: agent.title ?? agent.id,
+      }));
     return {
       enabled: Boolean(backup),
       commandOwned,
       sessions,
       unmonitoredCount: agents.length - sessions.length,
+      unmonitoredAgents,
       note:
         backup &&
         !same(config.providers.codex?.command, backup.installedCommand)

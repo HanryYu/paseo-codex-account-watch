@@ -1,5 +1,11 @@
 import React, { useMemo, useState, useSyncExternalStore } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useRpc,
@@ -25,12 +31,14 @@ function Action({
   label,
   disabled = false,
   secondary = false,
+  inline = false,
   onPress,
 }: {
   theme: PluginTheme;
   label: string;
   disabled?: boolean;
   secondary?: boolean;
+  inline?: boolean;
   onPress(): void;
 }) {
   return (
@@ -40,12 +48,16 @@ function Action({
       disabled={disabled}
       onPress={onPress}
       style={{
-        padding: 12,
+        paddingVertical: inline ? 7 : 12,
+        paddingHorizontal: inline ? 11 : 12,
         borderRadius: 8,
         backgroundColor: secondary
           ? theme.colors.surface2
           : theme.colors.accent,
+        borderWidth: 1,
+        borderColor: secondary ? theme.colors.border : "transparent",
         opacity: disabled ? 0.5 : 1,
+        alignSelf: inline ? "flex-start" : "stretch",
       }}
     >
       <Text
@@ -54,11 +66,159 @@ function Action({
             ? theme.colors.foreground
             : theme.colors.accentForeground,
           textAlign: "center",
+          fontSize: inline ? 14 : undefined,
+          fontWeight: secondary ? "400" : "500",
         }}
       >
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+function SettingsSection({
+  theme,
+  title,
+  children,
+}: {
+  theme: PluginTheme;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={{ gap: 12, marginBottom: 24 }}>
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 14,
+          marginLeft: 4,
+        }}
+      >
+        {title}
+      </Text>
+      <View
+        style={{
+          backgroundColor: theme.colors.surface1,
+          borderColor: theme.colors.border,
+          borderRadius: 8,
+          borderWidth: 1,
+          overflow: "hidden",
+        }}
+      >
+        {children}
+      </View>
+    </View>
+  );
+}
+
+type StatusTone = "success" | "warning" | "danger" | "muted";
+
+function StatusLabel({
+  theme,
+  label,
+  tone = "muted",
+}: {
+  theme: PluginTheme;
+  label: string;
+  tone?: StatusTone;
+}) {
+  const color =
+    tone === "success"
+      ? theme.colors.statusSuccess
+      : tone === "warning"
+        ? theme.colors.statusWarning
+        : tone === "danger"
+          ? theme.colors.statusDanger
+          : theme.colors.foregroundMuted;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <View
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: 4,
+          backgroundColor: color,
+        }}
+      />
+      <Text style={{ color, fontSize: 14 }} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function SettingsRow({
+  theme,
+  compact,
+  first = false,
+  icon,
+  title,
+  description,
+  status,
+  statusTone,
+  action,
+}: {
+  theme: PluginTheme;
+  compact: boolean;
+  first?: boolean;
+  icon: React.ComponentProps<typeof Icon>["name"];
+  title: string;
+  description: string;
+  status?: string;
+  statusTone?: StatusTone;
+  action?: React.ReactNode;
+}) {
+  return (
+    <View
+      style={{
+        borderTopColor: theme.colors.border,
+        borderTopWidth: first ? 0 : 1,
+        paddingHorizontal: 16,
+        paddingVertical: 16,
+        gap: compact ? 12 : 16,
+        flexDirection: compact ? "column" : "row",
+        alignItems: compact ? "stretch" : "center",
+      }}
+    >
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          flexDirection: "row",
+          alignItems: "flex-start",
+          gap: 12,
+        }}
+      >
+        <Icon name={icon} size={18} color={theme.colors.foregroundMuted} />
+        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+          <Text
+            style={{ color: theme.colors.foreground, fontSize: 16 }}
+            numberOfLines={1}
+          >
+            {title}
+          </Text>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 14 }}>
+            {description}
+          </Text>
+        </View>
+      </View>
+      {status || action ? (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: compact ? "space-between" : "flex-end",
+            gap: 12,
+            marginLeft: compact ? 30 : 0,
+          }}
+        >
+          {status ? (
+            <StatusLabel theme={theme} label={status} tone={statusTone} />
+          ) : null}
+          {action}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -348,6 +508,17 @@ function createNotice(initial: AccountSession, profiles: ProfileSummary[]) {
   };
 }
 
+function AccountSetupPill({ theme }: PluginComposerPillProps) {
+  return (
+    <>
+      <Icon name="UserRoundCog" size={14} color={theme.colors.statusWarning} />
+      <Text style={{ color: theme.colors.foregroundMuted }}>
+        Codex account setup
+      </Text>
+    </>
+  );
+}
+
 export function contributeClient(client: PluginClientContext) {
   const entries = new Map<
     string,
@@ -357,11 +528,14 @@ export function contributeClient(client: PluginClientContext) {
       remove: () => void | Promise<void>;
     }
   >();
+  const setupEntries = new Map<string, () => void | Promise<void>>();
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
   const clear = () => {
     for (const entry of entries.values()) void entry.remove();
     entries.clear();
+    for (const remove of setupEntries.values()) void remove();
+    setupEntries.clear();
   };
   const poll = async () => {
     try {
@@ -467,6 +641,30 @@ export function contributeClient(client: PluginClientContext) {
           }
         }
       }
+      const setupAgentIds = new Set(
+        result.unmonitoredAgents.map((agent) => agent.agentId),
+      );
+      for (const agent of result.unmonitoredAgents) {
+        if (setupEntries.has(agent.agentId)) continue;
+        setupEntries.set(
+          agent.agentId,
+          client.addComposerPill({
+            id: "account-setup",
+            title: "Set up Codex account switching",
+            workspaceId: agent.workspaceId,
+            agentId: agent.agentId,
+            Component: AccountSetupPill,
+            onPress() {
+              client.openSurface("main");
+            },
+          }),
+        );
+      }
+      for (const [agentId, remove] of setupEntries) {
+        if (setupAgentIds.has(agentId)) continue;
+        void remove();
+        setupEntries.delete(agentId);
+      }
     } catch {
       if (!stopped) {
         for (const entry of entries.values())
@@ -493,6 +691,7 @@ export function contributeClient(client: PluginClientContext) {
 }
 
 export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
+  const { width } = useWindowDimensions();
   const getStatus = useRpc(statusRpc);
   const setup = useRpc(setupRpc);
   const importProfiles = useRpc(importProfilesRpc);
@@ -510,9 +709,13 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
   const mutation = useMutation({
     mutationFn: (action: "enable" | "restore") =>
       setup({ action, confirmed: true }),
-    onSuccess(result) {
+    onSuccess(result, action) {
       toast.show(result.message, { variant: "success" });
-      setConfirm(null);
+      setConfirm(
+        action === "enable" && status.data?.profiles.length === 0
+          ? "import"
+          : null,
+      );
       void queryClient.invalidateQueries({ queryKey: ["account-watch"] });
     },
   });
@@ -520,7 +723,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
     mutationFn: () => importProfiles({ confirmed: true }),
     onSuccess(result) {
       toast.show(
-        `CC Switch accounts: ${result.imported} imported, ${result.updated} updated, ${result.skipped} skipped. Restart this Paseo host when idle to activate newly added providers.`,
+        `CC Switch accounts: ${result.imported} imported, ${result.updated} updated, ${result.skipped} skipped. Open a monitored agent and click its account pill to switch.`,
         { variant: "success" },
       );
       setConfirm(null);
@@ -529,159 +732,283 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
   });
   const confirmPending =
     confirm === "import" ? importMutation.isPending : mutation.isPending;
+  const launchIntegrationReady = Boolean(
+    status.data?.enabled && status.data.commandOwned,
+  );
+  const compactRows = layout.compact || width < 960;
   const styles = useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
-      content: { padding: layout.compact ? 16 : 24, gap: 16 },
-      title: {
-        color: theme.colors.foreground,
-        fontSize: 22,
-        fontWeight: "600" as const,
+      content: {
+        paddingHorizontal: compactRows ? 16 : 24,
+        paddingVertical: 24,
+        alignItems: "center" as const,
       },
+      frame: { width: "100%" as const, maxWidth: 720 },
       text: { color: theme.colors.foreground },
       detail: { color: theme.colors.foregroundMuted },
       error: { color: theme.colors.statusDanger },
-      card: {
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 8,
-        padding: 16,
-        gap: 8,
-      },
     }),
-    [theme, layout.compact],
+    [theme, compactRows],
   );
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Codex account watch</Text>
-      <Text style={styles.detail}>Host: {host.label}</Text>
-      <Text style={styles.detail}>
-        Detect external account changes and choose when each monitored agent
-        reloads. This plugin never signs in, switches accounts, or writes Codex
-        credentials.
-      </Text>
-      {status.isPending ? (
-        <Text style={styles.detail}>Checking this host…</Text>
-      ) : null}
-      {status.error ? (
-        <View style={{ gap: 8 }}>
-          <Text accessibilityRole="alert" style={styles.error}>
-            {status.error.message}
+      <View style={styles.frame}>
+        <View style={{ gap: 4, marginBottom: 24 }}>
+          <Text style={{ color: theme.colors.foreground, fontSize: 16 }}>
+            {host.label}
           </Text>
-          <Action
-            theme={theme}
-            secondary
-            label="Retry"
-            onPress={() => {
-              void status.refetch();
-            }}
-          />
+          <Text style={styles.detail}>
+            Configure isolated Codex accounts for this host. Credentials and
+            launch settings stay on the host you selected.
+          </Text>
         </View>
-      ) : null}
-      {status.data ? (
-        <>
-          {status.data.note ? (
-            <Text style={{ color: theme.colors.statusWarning }}>
-              {status.data.note}
+        {status.isPending ? (
+          <Text style={styles.detail}>Checking this host…</Text>
+        ) : null}
+        {status.error ? (
+          <View style={{ gap: 12 }}>
+            <Text accessibilityRole="alert" style={styles.error}>
+              {status.error.message}
             </Text>
-          ) : null}
-          <Action
-            theme={theme}
-            label={
-              status.data.enabled
-                ? "Restore original launch command"
-                : "Enable monitored Codex launches"
-            }
-            secondary={status.data.enabled}
-            disabled={status.data.enabled && !status.data.commandOwned}
-            onPress={() => {
-              mutation.reset();
-              setConfirm(status.data.enabled ? "restore" : "enable");
-            }}
-          />
-          <Text style={styles.detail}>
-            {status.data.sessions.length} monitored ·{" "}
-            {status.data.unmonitoredCount} unmonitored sessions
-          </Text>
-          <Text style={styles.detail}>
-            Existing processes are not taken over. Newly launched Codex sessions
-            use the monitored command. Restore the original command here before
-            uninstalling this plugin.
-          </Text>
-          <Action
-            theme={theme}
-            label="Import accounts from CC Switch"
-            secondary
-            onPress={() => {
-              importMutation.reset();
-              setConfirm("import");
-            }}
-          />
-          <Text style={styles.detail}>
-            Imported accounts become isolated Codex providers. Select one when
-            creating an agent after restarting this Paseo host; your system
-            Codex account is not replaced.
-          </Text>
-          {status.data.profiles.map((profile) => (
-            <View key={profile.id} style={styles.card}>
-              <Text style={styles.text}>{profile.name}</Text>
-              <Text selectable style={styles.detail}>
-                Account: {profile.accountLabel}
+            <Action
+              theme={theme}
+              secondary
+              inline
+              label="Retry"
+              onPress={() => {
+                void status.refetch();
+              }}
+            />
+          </View>
+        ) : null}
+        {status.data ? (
+          <>
+            {status.data.note ? (
+              <Text
+                style={{
+                  color: theme.colors.statusWarning,
+                  marginBottom: 16,
+                }}
+              >
+                {status.data.note}
               </Text>
-              <Text selectable style={styles.detail}>
-                Paseo provider: {profile.providerId}
-              </Text>
-            </View>
-          ))}
-          {status.data.migrations.slice(0, 3).map((task) => (
-            <View key={task.id} style={styles.card}>
-              <Text style={styles.text}>Migration · {task.title}</Text>
-              <Text style={styles.detail}>Status: {task.state}</Text>
-              {task.newAgentId ? (
-                <Text selectable style={styles.detail}>
-                  New agent: {task.newAgentId}
-                </Text>
-              ) : null}
-              {task.error ? (
-                <Text style={styles.error}>{task.error}</Text>
-              ) : null}
-            </View>
-          ))}
-          {status.data.sessions.map((session) => (
-            <View key={session.runId} style={styles.card}>
-              <Text style={styles.text}>{session.title}</Text>
-              <Text selectable style={styles.detail}>
-                Process: {session.previousLabel}
-              </Text>
-              <Text selectable style={styles.detail}>
-                Credentials: {session.nextLabel}
-              </Text>
-              <Text style={styles.detail}>
-                Runtime email:{" "}
-                {session.verification === "email"
-                  ? "matches launch identity"
-                  : session.verification}
-              </Text>
-              {session.problem ? (
-                <Text style={styles.error}>{session.problem}</Text>
-              ) : null}
-              {session.changed ? (
-                <Action
+            ) : null}
+            <SettingsSection theme={theme} title="Setup">
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                first
+                icon="TerminalSquare"
+                title="Agent launch integration"
+                description="Identifies the active account and enables safe agent restarts and thread migration."
+                status={launchIntegrationReady ? "Ready" : "Action required"}
+                statusTone={launchIntegrationReady ? "success" : "warning"}
+                action={
+                  !launchIntegrationReady ? (
+                    <Action
+                      theme={theme}
+                      inline
+                      label="Set up"
+                      disabled={
+                        status.data.enabled && !status.data.commandOwned
+                      }
+                      onPress={() => {
+                        mutation.reset();
+                        setConfirm("enable");
+                      }}
+                    />
+                  ) : undefined
+                }
+              />
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                icon="UsersRound"
+                title="Accounts from CC Switch"
+                description={
+                  status.data.profiles.length
+                    ? `${status.data.profiles.length} ${status.data.profiles.length === 1 ? "account" : "accounts"} stored privately on this host.`
+                    : "Import account profiles into isolated CODEX_HOME directories."
+                }
+                status={
+                  status.data.profiles.length
+                    ? `${status.data.profiles.length} imported`
+                    : "Not imported"
+                }
+                statusTone={status.data.profiles.length ? "success" : "muted"}
+                action={
+                  <Action
+                    theme={theme}
+                    inline
+                    secondary={status.data.profiles.length > 0}
+                    label={status.data.profiles.length ? "Sync" : "Import"}
+                    disabled={!launchIntegrationReady}
+                    onPress={() => {
+                      importMutation.reset();
+                      setConfirm("import");
+                    }}
+                  />
+                }
+              />
+              <SettingsRow
+                theme={theme}
+                compact={compactRows}
+                icon="Bot"
+                title="Codex agents"
+                description={
+                  status.data.unmonitoredCount > 0
+                    ? `${status.data.unmonitoredCount} existing ${status.data.unmonitoredCount === 1 ? "agent needs" : "agents need"} to be started again or reloaded after setup.`
+                    : status.data.sessions.length > 0
+                      ? "Use the account pill above an agent's message box to switch profiles."
+                      : "Start a new agent or reload an existing one after importing accounts."
+                }
+                status={
+                  status.data.sessions.length
+                    ? `${status.data.sessions.length} ready`
+                    : "None ready"
+                }
+                statusTone={status.data.sessions.length ? "success" : "muted"}
+              />
+            </SettingsSection>
+
+            <SettingsSection theme={theme} title="Accounts">
+              {status.data.profiles.length ? (
+                status.data.profiles.map((profile, index) => (
+                  <SettingsRow
+                    key={profile.id}
+                    theme={theme}
+                    compact={compactRows}
+                    first={index === 0}
+                    icon="UserRound"
+                    title={profile.name}
+                    description={`${profile.accountLabel} · Imported from CC Switch`}
+                    status="Available"
+                    statusTone="success"
+                  />
+                ))
+              ) : (
+                <SettingsRow
                   theme={theme}
-                  label="Review account change"
-                  onPress={() => setSelected(session)}
+                  compact={compactRows}
+                  first
+                  icon="UserRound"
+                  title="No imported accounts"
+                  description="Complete setup above, then import accounts from CC Switch."
                 />
-              ) : null}
-            </View>
-          ))}
-        </>
-      ) : null}
+              )}
+            </SettingsSection>
+
+            <SettingsSection theme={theme} title="Agents on this host">
+              {status.data.sessions.length ? (
+                status.data.sessions.map((session, index) => (
+                  <SettingsRow
+                    key={session.runId}
+                    theme={theme}
+                    compact={compactRows}
+                    first={index === 0}
+                    icon="Bot"
+                    title={session.title}
+                    description={
+                      session.problem
+                        ? session.problem
+                        : `${session.previousLabel} · Runtime ${session.verification === "email" ? "verified" : session.verification}`
+                    }
+                    status={
+                      session.changed
+                        ? "Account changed"
+                        : session.busy
+                          ? "Busy"
+                          : "Current"
+                    }
+                    statusTone={
+                      session.problem
+                        ? "danger"
+                        : session.changed || session.busy
+                          ? "warning"
+                          : "success"
+                    }
+                    action={
+                      session.changed ? (
+                        <Action
+                          theme={theme}
+                          inline
+                          label="Review"
+                          onPress={() => setSelected(session)}
+                        />
+                      ) : undefined
+                    }
+                  />
+                ))
+              ) : (
+                <SettingsRow
+                  theme={theme}
+                  compact={compactRows}
+                  first
+                  icon="Bot"
+                  title="No monitored agents"
+                  description="New or reloaded Codex agents will appear here when launch integration is ready."
+                />
+              )}
+            </SettingsSection>
+
+            {status.data.migrations.length ? (
+              <SettingsSection theme={theme} title="Recent migrations">
+                {status.data.migrations.slice(0, 3).map((task, index) => (
+                  <SettingsRow
+                    key={task.id}
+                    theme={theme}
+                    compact={compactRows}
+                    first={index === 0}
+                    icon="RefreshCw"
+                    title={task.title}
+                    description={
+                      task.error ??
+                      (task.newAgentId
+                        ? `New agent ${task.newAgentId}`
+                        : "Host migration in progress")
+                    }
+                    status={task.state}
+                    statusTone={task.error ? "danger" : "muted"}
+                  />
+                ))}
+              </SettingsSection>
+            ) : null}
+
+            {launchIntegrationReady ? (
+              <SettingsSection theme={theme} title="Advanced">
+                <SettingsRow
+                  theme={theme}
+                  compact={compactRows}
+                  first
+                  icon="Undo2"
+                  title="Restore original launch command"
+                  description="Remove the account wrapper for future Codex processes on this host."
+                  action={
+                    <Action
+                      theme={theme}
+                      inline
+                      secondary
+                      label="Restore"
+                      onPress={() => {
+                        mutation.reset();
+                        setConfirm("restore");
+                      }}
+                    />
+                  }
+                />
+              </SettingsSection>
+            ) : null}
+          </>
+        ) : null}
+      </View>
       <Modal
         title={
           confirm === "import"
             ? "Import CC Switch accounts"
             : confirm === "restore"
               ? "Restore Codex launches"
-              : "Enable monitored Codex launches"
+              : "Set up account switching"
         }
         open={confirm !== null}
         onOpenChange={(open) => {
@@ -695,7 +1022,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                 ? "Read Codex providers from ~/.cc-switch/cc-switch.db on this host. Valid credentials and provider configuration are copied into private, isolated CODEX_HOME directories. Raw credentials stay on this host and are never returned to the client. Official CC Switch rows without stored credentials are skipped."
                 : confirm === "restore"
                   ? "Restore the saved Codex command on this host. Existing processes are not stopped. If another tool changed the command, restoration is refused."
-                  : "This changes only this host's Codex launch command to a transparent local monitor. It preserves the original command, reads account labels, and can stop a matching idle process only when you confirm an agent reload. Node.js 22+ is required. No Codex token is copied or stored by the plugin."}
+                  : "The plugin will configure this host's Codex launch command through Paseo. Future Codex processes run through a transparent local wrapper that reports the active account and enables safe restart and thread migration. The original command is saved and can be restored here. Existing processes are not interrupted. No terminal setup is required."}
             </Text>
             {(confirm === "import" ? importMutation.error : mutation.error) ? (
               <Text accessibilityRole="alert" style={styles.error}>
@@ -714,7 +1041,7 @@ export function MainSurface({ theme, layout, host }: PluginSurfaceProps) {
                     ? "Import accounts"
                     : confirm === "restore"
                       ? "Restore command"
-                      : "Enable monitoring"
+                      : "Continue setup"
               }
               disabled={confirmPending}
               onPress={() => {

@@ -19,11 +19,17 @@ export const SessionSchema = z.object({
   problem: z.string().nullable(),
 });
 export type AccountSession = z.infer<typeof SessionSchema>;
+export const UnmonitoredAgentSchema = z.object({
+  agentId: z.string(),
+  workspaceId: z.string(),
+  title: z.string(),
+});
 export const StatusSchema = z.object({
   enabled: z.boolean(),
   commandOwned: z.boolean(),
   sessions: z.array(SessionSchema),
   unmonitoredCount: z.number(),
+  unmonitoredAgents: z.array(UnmonitoredAgentSchema),
   note: z.string().nullable(),
   profiles: z.array(ProfileSummarySchema),
   migrations: z.array(MigrationSummarySchema),

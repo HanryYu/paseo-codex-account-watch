@@ -14,7 +14,9 @@
 paseo plugin add HanryYu/paseo-codex-account-watch
 ```
 
-进入侧栏 **Codex accounts**，点击 **Enable monitored Codex launches**，确认后插件会自动保存并修改这个 host 的 Codex 启动命令。安装本身不会修改启动配置；不需要手工编辑项目配置。其他 provider 和原有环境变量会保留。
+进入侧栏 **Codex accounts**，确认页面显示的是目标 host，点击 **Set up account switching**，再按引导导入账号。插件会自动保存并修改该 host 的 Codex 启动命令；不需要终端或手工编辑配置。安装本身不会改启动命令，也不会复制凭据。
+
+Paseo 插件 API 暂未开放 Host Settings 区块或原生 Settings 路由，因此当前入口仍是 host-scoped sidebar surface。Host picker 由 Paseo 管理，所有操作只会作用于页面选中的 host。未接管的旧 Codex agent 会显示 **Codex account setup** 输入框入口并打开该页面。
 
 已运行的进程不会被接管。先新建一个 Codex agent 测试；已有 agent 要等到 Paseo 下一次启动它的进程后才会纳入监听。插件不会强制结束无法刷新的未监听旧进程。
 
