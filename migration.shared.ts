@@ -33,6 +33,7 @@ export const MigrationSummarySchema = MigrationTaskSchema.pick({
   sourceAgentId: true,
   newAgentId: true,
   workspaceId: true,
+  threadId: true,
   title: true,
   profileId: true,
   providerId: true,

@@ -61,7 +61,7 @@ test("bridges only the selected Codex rollout into an isolated account home", as
   }
 });
 
-test("detached migration runner restarts, imports, and renames in order", async () => {
+test("detached migration runner imports and renames without restarting the host", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "account-runner-test-"));
   const bin = path.join(root, "bin");
   const log = path.join(root, "calls.jsonl");
@@ -164,10 +164,113 @@ test("detached migration runner restarts, imports, and renames in order", async 
     assert.deepEqual(
       calls.map((args) => args.slice(0, 2)),
       [
-        ["daemon", "restart"],
         ["agent", "update"],
         ["agent", "inspect"],
       ],
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed migration reloads the archived source agent", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "account-runner-recovery-"),
+  );
+  const bin = path.join(root, "bin");
+  const log = path.join(root, "calls.jsonl");
+  const taskPath = path.join(root, "task.json");
+  const runner = path.join(root, "runner.cjs");
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  try {
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("No test port");
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        if (message.type === "hello") {
+          socket.send(
+            JSON.stringify({
+              type: "session",
+              message: {
+                type: "status",
+                payload: { status: "server_info", serverId: "test" },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.type === "session") {
+          socket.send(
+            JSON.stringify({
+              type: "session",
+              message: {
+                type: "status",
+                payload: {
+                  status: "agent_create_failed",
+                  requestId: message.message.requestId,
+                  error: "synthetic import failure",
+                },
+              },
+            }),
+          );
+        }
+      });
+    });
+    await mkdir(bin);
+    const paseo = path.join(bin, "paseo");
+    await writeFile(
+      paseo,
+      `#!/usr/bin/env node\nconst fs=require("node:fs");const args=process.argv.slice(2);fs.appendFileSync(process.env.TEST_CALLS,JSON.stringify(args)+"\\n");console.log(JSON.stringify({Id:"agent-old"}));\n`,
+    );
+    await chmod(paseo, 0o700);
+    await writeFile(runner, runnerSource);
+    const now = new Date().toISOString();
+    const task: MigrationTask = {
+      version: 1,
+      id: "33333333-3333-4333-8333-333333333333",
+      state: "scheduled",
+      sourceAgentId: "agent-old",
+      newAgentId: null,
+      workspaceId: "workspace",
+      threadId: "thread-test",
+      cwd: root,
+      title: "Original title",
+      profileId: "44444444-4444-4444-8444-444444444444",
+      providerId: "codex-cc-work-12345678",
+      home: path.join(root, "home"),
+      host: `127.0.0.1:${address.port}`,
+      labels: {},
+      createdAt: now,
+      updatedAt: now,
+      error: null,
+    };
+    await writeFile(taskPath, JSON.stringify(task), { mode: 0o600 });
+    const child = spawn(process.execPath, [runner, taskPath], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        TEST_CALLS: log,
+      },
+      stdio: "ignore",
+    });
+    const [code] = (await once(child, "close")) as [number];
+    assert.equal(code, 1);
+    const result = MigrationTaskSchema.parse(
+      JSON.parse(await readFile(taskPath, "utf8")),
+    );
+    assert.equal(result.state, "failed");
+    assert.equal(result.error, "synthetic import failure");
+    const calls = (await readFile(log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    assert.deepEqual(
+      calls.map((args) => args.slice(0, 3)),
+      [["agent", "reload", "agent-old"]],
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

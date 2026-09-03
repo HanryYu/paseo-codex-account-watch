@@ -37,15 +37,15 @@ Open **Codex accounts** and choose **Import accounts from CC Switch**. The plugi
 
 For a new agent, choose `Codex · <account name>` in Paseo's normal provider selector before sending the first message. Existing monitored agents can switch from the account pill. Imported account names can be edited under **Accounts**; the plugin updates the visible Paseo provider label without changing its ID, credentials, or isolated home. A custom name is preserved when CC Switch is synced again.
 
-Click the account pill on an idle monitored agent and choose an imported account. After a second confirmation, the plugin persists a migration task, hardlinks that Codex thread's rollout into the target account home, and starts a detached runner. The runner restarts the exact Paseo host, imports the thread using `Codex · <CC Switch name>`, restores the agent title, and verifies the imported agent through the CLI. The original agent remains closed and unarchived as a recovery copy.
+Click the account pill on an idle monitored agent and choose an imported account. After confirmation, the plugin hardlinks that Codex thread's rollout into the target account home, archives only the source agent, and starts a detached import runner. The runner imports the thread using `Codex · <CC Switch name>`, restores the agent title, and verifies the imported agent through the CLI. The archived source remains as a recovery copy; a failed import automatically reloads it.
 
-The host restart interrupts every running agent on that host, so the action is disabled while the selected agent is busy and the confirmation states the host-wide effect. A failed import is retained as a visible migration record; it is never reported as a successful switch.
+Other agents on the host are not interrupted. The action is disabled while the selected agent is busy. A failed import is retained as a visible migration record; it is never reported as a successful switch. A completed switch automatically opens the imported agent when client navigation is available, and the account page keeps an explicit **Open agent** action as a fallback.
 
 The selected process reads and refreshes only the imported profile's credentials; it does not replace `~/.codex/auth.json` or CC Switch's database. Re-import to pick up changed CC Switch credentials or configuration.
 
 CC Switch's official provider row normally does not contain the active ChatGPT credential. Such rows are skipped rather than silently importing the global Codex account. Custom CC Switch data-directory overrides are not detected in this release.
 
-Paseo cannot mutate the provider of an existing agent. The plugin therefore creates a new Paseo agent for the same Codex thread after restart instead of rewriting the old agent record.
+Paseo cannot mutate the provider of an existing agent. The plugin therefore creates a new Paseo agent for the same Codex thread instead of rewriting the old agent record. Repeating the same source-thread/profile switch returns the completed migration instead of importing the provider session twice.
 
 ## Use
 
@@ -129,7 +129,7 @@ npm run test:codex
 
 `test:daemon` starts a disposable Paseo daemon with synthetic credentials and a deterministic Codex fixture. It installs the plugin without `node_modules`, enables monitoring, detects A → B, rejects stale/concurrent/externally reconfigured reloads, resumes the same thread, verifies the fixture email, and restores the original command. It does not target your normal daemon.
 
-The same daemon test imports a synthetic CC Switch SQLite row, schedules an account migration, restarts only the disposable host, imports into the exact original workspace and thread under the isolated provider, and verifies the persisted migration result.
+The same daemon test imports a synthetic CC Switch SQLite row, switches the exact original workspace and thread to the isolated provider without restarting the daemon, verifies the imported agent, and checks that repeating the same switch is idempotent.
 
 Add `-- --git` to `npm run test:daemon` to install the public Git repository instead of the local source. This requires network access.
 

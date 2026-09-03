@@ -645,6 +645,36 @@ export class AccountService {
     try {
       await this.writeTail;
       await this.requireOwnedCommand(paseo);
+      const completed = await this.migrations.completedFor({
+        sourceAgentId: input.agentId,
+        profileId: input.profileId,
+      });
+      if (completed?.newAgentId) {
+        const switchedHandle = paseo.agents.ref(completed.newAgentId);
+        const switched = await switchedHandle.refresh();
+        if (switched?.agent) {
+          if (
+            switched.agent.archivedAt ||
+            switched.agent.status === "closed" ||
+            switched.agent.status === "error"
+          ) {
+            const host = await this.reloadTarget();
+            await this.processes.command(
+              "paseo",
+              [
+                "agent",
+                "reload",
+                completed.newAgentId,
+                "--host",
+                host,
+                "--json",
+              ],
+              this.home,
+            );
+          }
+          return completed;
+        }
+      }
       const handle = paseo.agents.ref(input.agentId);
       await handle.refresh();
       const agent = handle.current();
@@ -658,6 +688,11 @@ export class AccountService {
         throw safeMessage(
           "The agent must belong to a workspace with a working directory.",
         );
+      const profile = (await this.profiles.listRecords()).find(
+        (item) => item.id === input.profileId,
+      );
+      if (!profile)
+        throw safeMessage("The selected imported account no longer exists.");
       const records = (await this.records()).filter(
         (record) => record.agentId === input.agentId,
       );
@@ -671,11 +706,6 @@ export class AccountService {
         throw safeMessage(
           "The agent's Codex thread could not be matched safely.",
         );
-      const profile = (await this.profiles.listRecords()).find(
-        (item) => item.id === input.profileId,
-      );
-      if (!profile)
-        throw safeMessage("The selected imported account no longer exists.");
       if (path.dirname(record.authPath) === profile.home)
         throw safeMessage("This agent already uses the selected account.");
       const targetAuth = await readAuth(path.join(profile.home, "auth.json"));
@@ -702,7 +732,7 @@ export class AccountService {
           )
           .slice(0, 20),
       );
-      return await this.migrations.schedule(nodeExecutable, {
+      const migrationInput = {
         sourceAgentId: agent.id,
         workspaceId: agent.workspaceId,
         threadId,
@@ -712,7 +742,20 @@ export class AccountService {
         providerId: profile.providerId,
         host,
         labels,
-      });
+      };
+      await handle.archive();
+      try {
+        return await this.migrations.schedule(nodeExecutable, migrationInput);
+      } catch (error) {
+        await this.processes
+          .command(
+            "paseo",
+            ["agent", "reload", agent.id, "--host", host, "--json"],
+            this.home,
+          )
+          .catch(() => {});
+        throw error;
+      }
     } finally {
       this.reloads.delete(input.agentId);
       this.invalidateStatus();

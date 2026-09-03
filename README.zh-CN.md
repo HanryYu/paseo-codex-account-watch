@@ -26,15 +26,15 @@ Paseo 插件 API 暂未开放 Host Settings 区块或原生 Settings 路由，�
 
 新建 Agent 时，可以在发送第一条消息前通过 Paseo 原有的 Provider 选择器直接选择 `Codex · <账号名称>`。现有受监听 Agent 则使用输入框上方的账号入口切换。**账号** 区域支持自定义名称；插件会同步更新 Paseo Provider 的显示名称，不改变 Provider ID、凭据或独立目录。再次同步 CC Switch 时也会保留自定义名称。
 
-点击空闲受监听 agent 的账号入口并选择导入账号。再次确认后，插件会先持久化迁移任务，把该 Codex thread 的 rollout 硬链接到目标账号目录，再启动独立 runner。runner 会重启准确的 Paseo host，使用 `Codex · <CC Switch 名称>` 自动导入原 thread、恢复 agent 名称，并通过 CLI 再次确认新 agent 存在。旧 agent 保持关闭且不归档，作为恢复副本。
+点击空闲受监听 Agent 的账号入口并选择导入账号。确认后，插件会把该 Codex Thread 的 rollout 硬链接到目标账号目录，只归档原 Agent，再启动独立导入 runner。runner 使用 `Codex · <CC Switch 名称>` 自动导入原 Thread、恢复 Agent 名称，并通过 CLI 再次确认新 Agent 存在。归档的原 Agent 会保留为恢复副本；导入失败时会自动重新加载它。
 
-host 重启会中断该 host 上所有正在运行的 agent，因此所选 agent 忙碌时不能迁移，确认弹窗也会明确提示影响范围。导入失败会保留为可见迁移记录，不会显示切换成功。
+此流程不会重启 Host，也不会中断其他 Agent；所选 Agent 忙碌时不能迁移。导入失败会保留为可见迁移记录，不会显示切换成功。切换完成后，在客户端支持导航时会自动打开新 Agent；账号页面也保留 **打开 Agent** 操作作为备用入口。
 
 目标进程只会读取和刷新 profile 的凭据，不覆盖全局 `~/.codex/auth.json`，也不修改 CC Switch 数据库。重新导入可以同步凭据和配置。
 
 CC Switch 的官方 provider 行通常不保存当前 ChatGPT 凭据，插件会跳过，而不会把全局 Codex 账号冒充为已导入账号。本版也不会自动发现 CC Switch 的自定义数据目录。
 
-Paseo 当前不能修改既有 agent 的 provider，因此插件会在重启后为同一 Codex thread 创建新的 Paseo agent，而不是改写旧记录。
+Paseo 当前不能修改既有 Agent 的 Provider，因此插件会为同一 Codex Thread 创建新的 Paseo Agent，而不是改写旧记录。重复发起相同原 Thread/Profile 的切换会返回已完成任务，不会再次导入同一个 Provider Session。
 
 ## 使用
 
@@ -89,4 +89,4 @@ paseo plugin remove paseo-codex-account-watch
 
 没有用两个真实付费账号发送模型请求，也没有验证额度归属；原生 iOS/Android 和远程实体机器测试仍需补充。测试方式和实现边界见 [英文文档](README.md#development-and-validation)。
 
-隔离 daemon 测试还会导入合成的 CC Switch SQLite 账号、仅重启该测试 host，并确认迁移任务把相同 thread 导入到原 workspace 的独立 provider。
+隔离 daemon 测试还会导入合成的 CC Switch SQLite 账号，在不重启 daemon 的情况下把同一 Thread 切换到原 Workspace 的独立 Provider，并验证重复切换是幂等的。
