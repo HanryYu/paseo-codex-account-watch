@@ -113,7 +113,7 @@ async function importAgent(task: MigrationTask) {
       }
     });
     socket.addEventListener("error", () =>
-      finish(new Error("Could not connect to the restarted Paseo host.")),
+      finish(new Error("Could not connect to the Paseo host.")),
     );
   });
 }
@@ -122,12 +122,6 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, 750));
   const task = await readTask();
   try {
-    task.state = "restarting";
-    await save(task);
-    await paseo(
-      ["daemon", "restart", "--home", task.home, "--timeout", "15", "--json"],
-      task.home,
-    );
     task.state = "importing";
     await save(task);
     const agentId = await importAgent(task);
@@ -163,16 +157,29 @@ async function main() {
       inspectedData.Id !== agentId &&
       inspectedData.agentId !== agentId
     )
-      throw new Error("Imported agent could not be verified after restart.");
+      throw new Error("Imported agent could not be verified after import.");
     task.state = "completed";
     task.error = null;
     await save(task);
   } catch (error) {
+    let recoveryError: string | null = null;
+    try {
+      await paseo(
+        ["agent", "reload", task.sourceAgentId, "--host", task.host, "--json"],
+        task.home,
+      );
+    } catch (recovery) {
+      recoveryError =
+        recovery instanceof Error ? recovery.message : String(recovery);
+    }
     task.state = "failed";
-    task.error =
+    const failure =
       error instanceof Error
         ? error.message.replace(/[\r\n]+/g, " ").slice(0, 400)
         : "Account migration failed.";
+    task.error = recoveryError
+      ? `${failure} Original agent recovery also failed.`
+      : failure;
     await save(task);
     process.exitCode = 1;
   }

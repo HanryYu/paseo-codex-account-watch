@@ -1,4 +1,9 @@
-import React, { useMemo, useState, useSyncExternalStore } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   Pressable,
   ScrollView,
@@ -39,6 +44,7 @@ function localeFromProps(value: unknown): string | undefined {
 }
 
 const STATUS_POLL_INTERVAL_MS = 5000;
+const pendingMigrationNavigation = new Map<string, string>();
 
 function Action({
   theme,
@@ -533,6 +539,7 @@ function ProfileDialog({
   theme,
   t,
   open,
+  onMigrationScheduled,
   onOpenChange,
 }: {
   session: AccountSession;
@@ -540,6 +547,7 @@ function ProfileDialog({
   theme: PluginTheme;
   t: Translate;
   open: boolean;
+  onMigrationScheduled(taskId: string): void;
   onOpenChange(open: boolean): void;
 }) {
   const migrate = useRpc(migrateProfileRpc);
@@ -552,12 +560,13 @@ function ProfileDialog({
         agentId: session.agentId,
         runId: session.runId,
         profileId,
-        confirmedRestart: true,
+        confirmedSwitch: true,
       }),
     onSuccess(task) {
       toast.show(t("migrationScheduled", { id: task.id.slice(0, 8) }), {
         variant: "success",
       });
+      onMigrationScheduled(task.id);
       onOpenChange(false);
     },
   });
@@ -783,6 +792,10 @@ export function contributeClient(client: PluginClientContext) {
                   theme={theme}
                   t={pillT}
                   open={state.open}
+                  onMigrationScheduled={(taskId) => {
+                    pendingMigrationNavigation.set(props.host.id, taskId);
+                    client.openSurface("main");
+                  }}
                   onOpenChange={notice.open}
                 />
               )}
@@ -907,6 +920,20 @@ export function MainSurface(props: PluginSurfaceProps) {
     localeFromProps(props),
   );
   const t = translator(locale);
+  useEffect(() => {
+    const taskId = pendingMigrationNavigation.get(host.id);
+    if (!taskId || !status.data) return;
+    const task = status.data.migrations.find((item) => item.id === taskId);
+    if (!task) return;
+    if (task.state === "failed") {
+      pendingMigrationNavigation.delete(host.id);
+      return;
+    }
+    if (task.state === "completed" && task.newAgentId && props.navigation) {
+      pendingMigrationNavigation.delete(host.id);
+      props.navigation.openAgent({ agentId: task.newAgentId });
+    }
+  }, [host.id, props.navigation, status.data]);
   const [confirm, setConfirm] = useState<
     "enable" | "restore" | "import" | null
   >(null);
@@ -1233,6 +1260,23 @@ export function MainSurface(props: PluginSurfaceProps) {
                     }
                     status={task.state}
                     statusTone={task.error ? "danger" : "muted"}
+                    action={
+                      task.state === "completed" &&
+                      task.newAgentId &&
+                      props.navigation ? (
+                        <Action
+                          theme={theme}
+                          inline
+                          secondary
+                          label={t("openAgent")}
+                          onPress={() =>
+                            props.navigation!.openAgent({
+                              agentId: task.newAgentId!,
+                            })
+                          }
+                        />
+                      ) : undefined
+                    }
                   />
                 ))}
               </SettingsSection>

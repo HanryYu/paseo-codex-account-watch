@@ -68,7 +68,7 @@ export const migrateProfileRpc = defineRpc({
     agentId: z.string().min(1),
     runId: z.string().uuid(),
     profileId: z.string().uuid(),
-    confirmedRestart: z.literal(true),
+    confirmedSwitch: z.literal(true),
   }),
   output: StatusSchema.shape.migrations.element,
 });

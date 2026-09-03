@@ -134,6 +134,23 @@ export class MigrationCoordinator {
     return tasks.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  async completedFor(input: {
+    sourceAgentId: string;
+    profileId: string;
+    threadId?: string;
+  }): Promise<MigrationSummary | null> {
+    return (
+      (await this.list()).find(
+        (task) =>
+          task.state === "completed" &&
+          Boolean(task.newAgentId) &&
+          task.sourceAgentId === input.sourceAgentId &&
+          (input.threadId === undefined || task.threadId === input.threadId) &&
+          task.profileId === input.profileId,
+      ) ?? null
+    );
+  }
+
   async schedule(
     nodeExecutable: string,
     input: Omit<

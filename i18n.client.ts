@@ -25,11 +25,11 @@ const en = {
   keepSession: "Keep current session",
   chooseAccount: "Choose Codex account",
   migrationExplanation:
-    "Switching restarts this Paseo host, imports the same Codex thread under the selected account, and keeps the old agent closed as a recovery copy. Every running agent on this host is interrupted.",
+    "Switching archives this idle agent and imports the same Codex thread under the selected account. The archived agent remains as a recovery copy, and other agents on this host are not interrupted.",
   current: "Current",
   importFirst: "Import CC Switch accounts first.",
-  restartingHost: "Restarting host…",
-  restartAndSwitch: "Restart host and switch",
+  restartingHost: "Switching account…",
+  restartAndSwitch: "Switch account",
   cancel: "Cancel",
   setupPill: "Codex account setup",
   accountChangedPill: "Codex account changed",
@@ -134,7 +134,8 @@ const en = {
   importComplete:
     "CC Switch accounts: {imported} imported, {updated} updated, {skipped} skipped. Choose an imported Codex provider when creating a new agent, or use the account pill in an existing agent.",
   migrationScheduled:
-    "Account migration {id} scheduled. This host is restarting.",
+    "Account switch {id} started. The switched agent will open when it is ready.",
+  openAgent: "Open agent",
 } as const;
 
 type MessageKey = keyof typeof en;
@@ -161,11 +162,11 @@ const zhCN: Messages = {
   keepSession: "保留当前会话",
   chooseAccount: "选择 Codex 账号",
   migrationExplanation:
-    "切换账号会重启此 Paseo Host，并在所选账号下导入同一个 Codex 会话。旧 Agent 会保持关闭作为恢复副本，此 Host 上所有运行中的 Agent 都会被中断。",
+    "切换账号会归档当前空闲 Agent，并在所选账号下导入同一个 Codex 会话。归档的 Agent 会保留为恢复副本，此 Host 上的其他 Agent 不会被中断。",
   current: "当前",
   importFirst: "请先导入 CC Switch 账号。",
-  restartingHost: "正在重启 Host…",
-  restartAndSwitch: "重启 Host 并切换",
+  restartingHost: "正在切换账号…",
+  restartAndSwitch: "切换账号",
   cancel: "取消",
   setupPill: "设置 Codex 账号",
   accountChangedPill: "Codex 账号已更改",
@@ -263,7 +264,8 @@ const zhCN: Messages = {
   restoreComplete: "已恢复原始 Codex 启动命令。",
   importComplete:
     "CC Switch 账号：导入 {imported} 个，更新 {updated} 个，跳过 {skipped} 个。新建 Agent 时请选择导入的 Codex Provider；现有 Agent 可使用账号入口切换。",
-  migrationScheduled: "账号迁移 {id} 已安排，此 Host 正在重启。",
+  migrationScheduled: "账号切换 {id} 已开始，准备完成后会自动打开新 Agent。",
+  openAgent: "打开 Agent",
 };
 
 const dictionaries: Record<Locale, Messages> = { en, "zh-CN": zhCN };

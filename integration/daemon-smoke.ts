@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, writeFile, readFile, rm, cp } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { MigrationTaskSchema } from "../migration.shared";
@@ -147,6 +147,7 @@ async function main() {
       url: `ws://${host}/ws`,
       clientId: "plugin-integration",
       clientType: "cli",
+      appVersion: "0.7.2",
       reconnect: { enabled: false },
       connectTimeoutMs: 2000,
     });
@@ -375,16 +376,20 @@ async function main() {
     status = StatusSchema.parse(
       await client.invokePluginRpc(plugin.id, "accounts.status", {}),
     );
+    const daemonPidBeforeMigration = JSON.parse(
+      await readFile(path.join(home, "paseo.pid"), "utf8"),
+    ).pid;
+    const migrationInput = {
+      agentId: agent.id,
+      runId: status.sessions.find((session) => session.agentId === agent.id)!
+        .runId,
+      profileId: imported.profiles[0].id,
+      confirmedSwitch: true,
+    } as const;
     const migration = (await client.invokePluginRpc(
       plugin.id,
       "accounts.profiles.migrate-agent",
-      {
-        agentId: agent.id,
-        runId: status.sessions.find((session) => session.agentId === agent.id)!
-          .runId,
-        profileId: imported.profiles[0].id,
-        confirmedRestart: true,
-      },
+      migrationInput,
     )) as { id: string };
     const migrationPath = path.join(
       home,
@@ -415,18 +420,44 @@ async function main() {
       migrationResult?.error ?? undefined,
     );
     assert.ok(migrationResult?.newAgentId);
-    await client.close().catch(() => {});
-    client = createClient();
-    for (let attempt = 0; attempt < 40; attempt++) {
-      try {
-        await client.connect();
-        break;
-      } catch {
-        if (attempt === 39)
-          throw new Error("Restarted daemon did not reconnect");
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
+    assert.equal(
+      JSON.parse(await readFile(path.join(home, "paseo.pid"), "utf8")).pid,
+      daemonPidBeforeMigration,
+    );
+    const switchedAgent = await client.fetchAgent(migrationResult!.newAgentId!);
+    assert.equal(switchedAgent?.agent.provider, profileProvider);
+    assert.equal(switchedAgent?.agent.runtimeInfo?.sessionId, "thread-test");
+    assert.notEqual(switchedAgent?.agent.status, "closed");
+    const archivedSource = await client.fetchAgent(agent.id);
+    assert.ok(archivedSource?.agent.archivedAt);
+    assert.equal(archivedSource?.agent.status, "closed");
+    const repeatedMigration = (await client.invokePluginRpc(
+      plugin.id,
+      "accounts.profiles.migrate-agent",
+      migrationInput,
+    )) as { id: string; newAgentId: string | null };
+    assert.equal(repeatedMigration.id, migration.id);
+    assert.equal(repeatedMigration.newAgentId, migrationResult?.newAgentId);
+    await client.archiveAgent(migrationResult!.newAgentId!);
+    const recoveredMigration = (await client.invokePluginRpc(
+      plugin.id,
+      "accounts.profiles.migrate-agent",
+      migrationInput,
+    )) as { id: string; newAgentId: string | null };
+    assert.equal(recoveredMigration.id, migration.id);
+    let recoveredAgent = await client.fetchAgent(migrationResult!.newAgentId!);
+    for (
+      let attempt = 0;
+      attempt < 20 &&
+      (recoveredAgent?.agent.archivedAt ||
+        recoveredAgent?.agent.status === "closed");
+      attempt++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      recoveredAgent = await client.fetchAgent(migrationResult!.newAgentId!);
     }
+    assert.equal(recoveredAgent?.agent.archivedAt, null);
+    assert.notEqual(recoveredAgent?.agent.status, "closed");
     assert.equal(migrationResult?.providerId, profileProvider);
     assert.equal(migrationResult?.workspaceId, workspace.workspace.id);
     assert.equal(migrationResult?.threadId, "thread-test");
@@ -461,7 +492,7 @@ async function main() {
     assert.deepEqual(persisted.agents.providers.codex.command, originalCommand);
     assert.equal(persisted.agents.providers.codex.env.CODEX_HOME, codexHome);
     console.log(
-      "隔离 daemon：无 node_modules 安装、自动配置、A→B 检测、CC Switch 导入、host 重启、同 workspace/thread 自动导入、拒绝过期确认、并发刷新去重、邮箱确认、外部配置保护与恢复通过。",
+      "隔离 daemon：无 node_modules 安装、自动配置、A→B 检测、CC Switch 导入、无 host 重启切换、同 workspace/thread 自动导入、重复请求幂等、拒绝过期确认、并发刷新去重、邮箱确认、外部配置保护与恢复通过。",
     );
     if (process.argv.includes("--exit-before-cleanup")) {
       await client.shutdownServer({ timeout: 3000 });
